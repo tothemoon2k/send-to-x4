@@ -79,6 +79,12 @@ Chrome and Safari extensions are byte-for-byte identical except for
 `manifest.json`'s `browser_specific_settings`. **Keep their JS
 in sync** — if you fix a bug in one, copy it to the other.
 
+**The daemon owns capture IDs.** `Capture.init(from:)` mints a fresh
+UUID when the JSON omits `id`; only `url` is strictly required.
+Browser extensions don't generate IDs — don't tighten that contract
+without updating all three clients. (The original Chrome bug was the
+synthesized decoder rejecting browser POSTs for missing `id`.)
+
 **The Share Extension uses AppleScript to read Safari's live DOM**
 (`ShareExtension/ShareViewController.swift`). This is deliberate, not
 expedient — see decision D10 in SPEC.md. Re-fetching URLs server-side
@@ -116,6 +122,15 @@ Support/SendToX4/queue.json` is rewritten atomically on every mutation.
 Per-item `<id>.capture.json` and `<slug>-<id>.epub` live alongside in
 `queue/`. The whole thing is bounded by "items captured between two X4
 File Transfer sessions" — small enough that SQLite would be overkill.
+
+**Same-URL re-enqueue is destructive on disk too.** When a new capture
+arrives for a URL already pending/ready/building, `QueueStore.enqueue`
+evicts the prior item *and* deletes its `.capture.json` / `.epub` so
+rapid re-clicks don't pile up debris. The flip side: `BuildPipeline`
+returns EPUB bytes in memory and `QueueStore.attachEpub` writes them
+to disk atomically with the manifest update — so a build that finishes
+*after* its item was evicted drops the bytes rather than orphaning a
+stale `.epub`. Don't move EPUB writes back into the build step.
 
 ## Constraints
 

@@ -28,13 +28,19 @@ public actor BuildPipeline {
         try? await queue.setStatus(id: next.id, .building, error: nil)
         do {
             let outcome = try await build(item: next)
-            try await queue.update(id: next.id) { item in
-                item.epubFilename = outcome.filename
-                item.epubSize = outcome.size
-                item.status = .ready
-                item.lastError = outcome.warning
+            let attached = try await queue.attachEpub(
+                id: next.id,
+                filename: outcome.filename,
+                data: outcome.data,
+                warning: outcome.warning
+            )
+            if attached {
+                log("[build] ready: \(outcome.filename) (\(outcome.data.count) bytes) for \(next.capture.url)")
+            } else {
+                // Item was evicted (e.g. same-URL re-enqueue) while the build
+                // was in flight; the EPUB is dropped rather than orphaned.
+                log("[build] dropped stale build for \(next.capture.url) — item evicted")
             }
-            log("[build] ready: \(outcome.filename) (\(outcome.size) bytes) for \(next.capture.url)")
         } catch {
             log("[build] failed: \(error) for \(next.capture.url)")
             try? await queue.incrementAttempts(id: next.id)
@@ -51,7 +57,7 @@ public actor BuildPipeline {
 
     public struct BuildOutcome {
         public var filename: String
-        public var size: Int
+        public var data: Data
         public var warning: String?
     }
 
@@ -164,11 +170,10 @@ public actor BuildPipeline {
         )
         let data = try EpubWriter.write(epubInput)
 
-        // 6. Persist.
+        // The EPUB is written to disk by QueueStore.attachEpub atomically with
+        // the manifest update — keeps the disk and the manifest in sync.
         let filename = epubFilename(for: item, title: polishedTitle)
-        let outURL = AppPaths.queueDir.appendingPathComponent(filename)
-        try data.write(to: outURL, options: [.atomic])
-        return BuildOutcome(filename: filename, size: data.count, warning: fellBack ? "polish fell back" : nil)
+        return BuildOutcome(filename: filename, data: data, warning: fellBack ? "polish fell back" : nil)
     }
 
     private func epubFilename(for item: QueueItem, title: String) -> String {

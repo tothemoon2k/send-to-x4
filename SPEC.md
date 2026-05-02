@@ -246,8 +246,12 @@ For each pending `QueueItem`:
    - `META-INF/container.xml`
    - `OEBPS/{content.opf, nav.xhtml, style.css, cover.{xhtml,png}, chapter-NNN.xhtml, img-NNN.png}`
    - Zipped via `ZipWriter` (DEFLATE for everything except mimetype).
-6. **Persist** — write to `~/Library/Application Support/SendToX4/queue/<slug>-<id>.epub`,
-   set `QueueItem.status = .ready`.
+6. **Persist** — `build()` returns EPUB bytes in memory.
+   `QueueStore.attachEpub` writes them to
+   `~/Library/Application Support/SendToX4/queue/<slug>-<id>.epub`
+   atomically with flipping `QueueItem.status = .ready`. If the item
+   was evicted (same-URL re-enqueue) while the build was in flight,
+   the bytes are dropped — no orphan `.epub` lands in the queue dir.
 
 On failure: increment `attempts`, drop back to `.pending` for retry up
 to `maxAttempts = 4`, then `.failed`.
@@ -284,6 +288,10 @@ Idempotent flush:
 - `queue/<slug>-<id>.epub` — built EPUBs awaiting upload.
 - `settings.json` — non-secret prefs.
 
+Same-URL re-enqueue evicts the older pending/ready/building item *and*
+deletes its `.capture.json` and `.epub` from disk, so rapid re-clicks
+on Send to X4 don't pile up debris.
+
 Anthropic API key is stored in macOS Keychain under service
 `com.justingarner.sendtox4`, account `anthropic.api.key`. Never on disk
 in plaintext.
@@ -298,6 +306,10 @@ POST /flush                   → trigger immediate upload attempt
 POST /settings/x4-ip          → { ip: "192.168.x.y" }
 POST /settings/api-key        → { key: "sk-ant-…" } (writes to Keychain)
 ```
+
+`Capture.id` is optional in the POST `/capture` body; the daemon mints
+a UUID when absent. Only `url` is strictly required. Browser
+extensions don't generate IDs — server owns them.
 
 Default port `47821`, overridable with `SENDTOX4_PORT`. No auth. Loopback
 listening only.

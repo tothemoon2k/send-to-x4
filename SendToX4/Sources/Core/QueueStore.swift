@@ -68,15 +68,25 @@ public actor QueueStore {
     @discardableResult
     public func enqueue(_ capture: Capture) throws -> QueueItem {
         ensureLoaded()
-        // Idempotency: if same URL is already pending/ready, replace it.
-        items.removeAll { existing in
+        // Idempotency: if same URL is already pending/ready/building, replace it.
+        // Evicted items' on-disk artifacts (capture json, any built epub) are
+        // deleted so rapid re-clicks on Send to X4 don't leave debris behind.
+        let evicted = items.filter { existing in
             existing.capture.url == capture.url &&
             (existing.status == .pending || existing.status == .ready || existing.status == .building)
+        }
+        items.removeAll { e in evicted.contains(where: { $0.id == e.id }) }
+        let dir = AppPaths.queueDir
+        for old in evicted {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(old.id).capture.json"))
+            if let epub = old.epubFilename {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(epub))
+            }
         }
         let item = QueueItem(capture: capture)
         items.append(item)
         // Persist the raw capture for retry/debug.
-        let captureURL = AppPaths.queueDir.appendingPathComponent("\(item.id).capture.json")
+        let captureURL = dir.appendingPathComponent("\(item.id).capture.json")
         let captureData = try JSONEncoder.pretty.encode(capture)
         try? captureData.write(to: captureURL, options: [.atomic])
         try persist()
@@ -98,12 +108,23 @@ public actor QueueStore {
         }
     }
 
-    public func attachEpub(id: String, filename: String, size: Int) throws {
-        try update(id: id) { item in
-            item.epubFilename = filename
-            item.epubSize = size
-            item.status = .ready
-        }
+    /// Atomically writes the built EPUB to disk and marks the queue item
+    /// `ready`. Returns `false` if the item was evicted (e.g. by a same-URL
+    /// re-enqueue) while the build was in flight — the EPUB bytes are then
+    /// dropped rather than written, preventing orphan files in the queue dir.
+    @discardableResult
+    public func attachEpub(id: String, filename: String, data: Data, warning: String?) throws -> Bool {
+        ensureLoaded()
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return false }
+        let url = AppPaths.queueDir.appendingPathComponent(filename)
+        try data.write(to: url, options: [.atomic])
+        items[idx].epubFilename = filename
+        items[idx].epubSize = data.count
+        items[idx].status = .ready
+        items[idx].lastError = warning
+        items[idx].updatedAt = Date()
+        try persist()
+        return true
     }
 
     public func incrementAttempts(id: String) throws {
