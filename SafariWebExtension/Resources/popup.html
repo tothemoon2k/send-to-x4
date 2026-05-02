@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Send to X4</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 13px -apple-system, system-ui, sans-serif;
+        margin: 0;
+        padding: 12px 14px 14px;
+        width: 280px;
+      }
+      h1 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 10px;
+        letter-spacing: 0.01em;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0;
+        border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+      }
+      .row:first-of-type { border-top: 0; }
+      .label { opacity: 0.7; }
+      .value { font-variant-numeric: tabular-nums; }
+      button {
+        margin-top: 10px;
+        width: 100%;
+        padding: 7px 10px;
+        font: inherit;
+        border-radius: 6px;
+        border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+        background: color-mix(in srgb, currentColor 6%, transparent);
+        cursor: pointer;
+      }
+      button:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+      button:active { background: color-mix(in srgb, currentColor 14%, transparent); }
+      .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+      .status-up { background: #34c759; }
+      .status-down { background: #ff3b30; }
+      .status-unknown { background: #aaa; }
+      .empty { opacity: 0.6; padding: 6px 0; }
+      .err { color: #ff3b30; padding: 6px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Send to X4</h1>
+    <div id="content" class="empty">Checking helper…</div>
+    <button id="send-now">Send this page</button>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
