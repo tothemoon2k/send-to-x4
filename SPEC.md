@@ -26,9 +26,9 @@ They invoke "Send to X4" through any of three surfaces:
 - **Toolbar popup** in either browser — explicit "Send this page" button.
 
 The captured article is converted to a single-chapter (or multi-chapter,
-for long pieces) EPUB tuned for the X4's 4.3" e-ink panel — including a
-hand-drawn cover, grayscale-dithered images, and a stylesheet that
-matches the device's renderer. The EPUB lands in a local queue.
+for long pieces) EPUB tuned for the X4's 4.3" e-ink panel — with
+grayscale-dithered images and a stylesheet that matches the device's
+renderer. The EPUB lands in a local queue.
 
 The user later puts the X4 into File Transfer mode (it joins WiFi and
 exposes an HTTP server on port 80). A background process on the Mac
@@ -127,7 +127,6 @@ These facts shape every design decision below.
 │  │  BuildPipeline                                          │  │
 │  │     HTMLSanitizer  →  ClaudePolish (cached)             │  │
 │  │       → ImageProcessor (grayscale + Atkinson dither)    │  │
-│  │       → CoverGenerator                                  │  │
 │  │       → EpubWriter (pure Swift)  → queue/<id>.epub      │  │
 │  └─────────────────────────────────────────────────────────┘  │
 │                                                               │
@@ -237,16 +236,16 @@ For each pending `QueueItem`:
    dither (6/8 error-diffusion) to a 16-level palette, encodes PNG.
    Failed downloads cause the corresponding `<img>` to be dropped from
    the chapter HTML.
-4. **Cover** — `CoverGenerator` draws a Library-of-America-style
-   title card via Core Graphics + Core Text: title in Hoefler Text,
-   italic byline, source domain in tracked uppercase. Pure typography
-   on cream — photographic covers look muddy on the panel.
-5. **Assemble** — `EpubWriter` produces a complete EPUB 3 in memory:
+4. **Assemble** — `EpubWriter` produces a complete EPUB 3 in memory:
    - `mimetype` (STORED, first entry, offset 38)
    - `META-INF/container.xml`
-   - `OEBPS/{content.opf, nav.xhtml, style.css, cover.{xhtml,png}, chapter-NNN.xhtml, img-NNN.png}`
+   - `OEBPS/{content.opf, nav.xhtml, style.css, chapter-NNN.xhtml, img-NNN.png}`
    - Zipped via `ZipWriter` (DEFLATE for everything except mimetype).
-6. **Persist** — `build()` returns EPUB bytes in memory.
+   - No cover page — articles open directly into the body. The nav
+     document is always in the manifest (EPUB 3 requires it) but only
+     appears in the spine when there's more than one chapter, so a
+     single-chapter article doesn't get a useless one-link TOC page.
+5. **Persist** — `build()` returns EPUB bytes in memory.
    `QueueStore.attachEpub` writes them to
    `~/Library/Application Support/SendToX4/queue/<slug>-<id>.epub`
    atomically with flipping `QueueItem.status = .ready`. If the item
@@ -379,9 +378,8 @@ power users toward.
 **D11. Swift menubar over Go daemon.**
 Considered Go for a single-binary helper. Swift wins because (a) the
 Share Extension and menubar UI are native Swift anyway, (b) all macOS
-APIs we need (Keychain, AppleScript, Network.framework, ImageIO,
-NSAttributedString cover rendering) are first-class in Swift, (c) we
-ship one toolchain instead of two.
+APIs we need (Keychain, AppleScript, Network.framework, ImageIO) are
+first-class in Swift, (c) we ship one toolchain instead of two.
 
 **D12. Loopback-only, no daemon auth.**
 The daemon listens on 127.0.0.1 and refuses non-loopback connections.
@@ -450,8 +448,8 @@ how the user previews builds before sending.
   (`Sources/Core/HTMLSanitizer.swift`).
 - ✅ Image processor: grayscale + Atkinson dither + resize
   (`Sources/Core/ImageProcessor.swift`).
-- ✅ Pure-Swift EPUB writer, X4-tuned stylesheet, cover generator
-  (`Sources/Core/{ZipWriter,EpubWriter,X4Stylesheet,CoverGenerator}.swift`).
+- ✅ Pure-Swift EPUB writer + X4-tuned stylesheet
+  (`Sources/Core/{ZipWriter,EpubWriter,X4Stylesheet}.swift`).
 - ✅ Claude Sonnet 4.6 polish with prompt caching + 95% guardrail
   (`Sources/Core/ClaudePolish.swift`).
 - ✅ X4 client + probe + idempotent uploader
@@ -470,12 +468,12 @@ how the user previews builds before sending.
 - ✅ `tools/setkey.sh` — Keychain-safe API key entry.
 
 **Verification**
-- ✅ Smoke test passes: 21 KB EPUB with cover, OPF, nav, chapter, all
-  required entries; `unzip -l` accepts.
+- ✅ Smoke test passes: builds both a single-chapter and a multi-chapter
+  EPUB, unzip accepts both, and the OPF spine asserts that the nav
+  document is included only when there's more than one chapter.
 - ✅ Daemon roundtrip verified end-to-end: POST `/capture` →
   HTMLSanitizer strips `<script>`/`<iframe>`/Subscribe-Share buttons →
   EPUB lands in `~/Library/Application Support/SendToX4/queue/`.
-- ✅ Cover render visually inspected.
 
 ---
 
@@ -512,8 +510,6 @@ how the user previews builds before sending.
 - "Re-build with polish" action on a queued item that initially failed
   the 95% guardrail.
 - "Skip polish" toggle in the right-click context menu.
-- Cover variant: option to use `og:image` (dithered) instead of pure
-  typography for image-heavy posts.
 
 **Future, deliberately out of scope today**
 
@@ -522,8 +518,8 @@ how the user previews builds before sending.
 - Long-book splitting into multi-volume EPUBs.
 - Cross-device queue sync (pretty much defeats the local-helper model).
 - Linux / Windows daemon — possible (the Core targets are mostly
-  Foundation), but `CoverGenerator` and `ImageProcessor` lean on
-  AppKit / ImageIO. Would need replacements.
+  Foundation), but `ImageProcessor` leans on AppKit / ImageIO. Would
+  need a replacement.
 - Send-to-Kindle reuse — different device, different format pipeline,
   but the same architecture would work.
 

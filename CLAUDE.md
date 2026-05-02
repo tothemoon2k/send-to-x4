@@ -58,9 +58,12 @@ instead of an XCTest target.
 
 **The pipeline is a chain of pure functions over `Capture`.** A
 `Capture` (`Sources/Core/Capture.swift`) flows through `HTMLSanitizer`
-→ `ClaudePolish` (optional) → `ImageProcessor` → `CoverGenerator` →
-`EpubWriter`, glued by `BuildPipeline.processNext()`. Each step is
-independently testable; none mutate the queue except the last one.
+→ `ClaudePolish` (optional) → `ImageProcessor` → `EpubWriter`, glued
+by `BuildPipeline.processNext()`. Each step is independently testable;
+none mutate the queue except the last one. Articles don't get a cover
+page — the EPUB opens straight into the body — and the TOC (nav doc)
+only appears in the spine when there's more than one chapter, since a
+TOC for a single-chapter article is pure noise.
 
 **The polish step has a hard contract.** `ClaudePolish` MUST NOT
 paraphrase or rewrite article body text. The 95%-of-input word-count
