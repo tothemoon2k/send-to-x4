@@ -1,9 +1,11 @@
 # Send to X4 — Specification
 
 A "Send to X4" pipeline for the Xteink X4 e-reader. Right-click any web
-article in Chrome or Safari (or use the macOS share sheet), and a clean,
-typographically tuned EPUB lands on the device the next time it enters
-File Transfer mode.
+article *or any book detail page* in Chrome or Safari (or use the macOS
+share sheet), and a clean, typographically tuned EPUB lands on the
+device the next time it enters File Transfer mode. For book pages
+("Send book to X4") the helper identifies the book via Claude, fetches
+it from Anna's Archive, and converts to EPUB if needed.
 
 Status as of 2026-05-02: pipeline end-to-end functional via the headless
 daemon + Chrome extension. Mac app, Safari Web Extension, and Share
@@ -16,19 +18,33 @@ build (see "Build & run").
 
 ### What it does
 
-The user is reading an essay, blog post, or longform piece in a browser.
-They invoke "Send to X4" through any of three surfaces:
+The user is reading an essay, blog post, longform piece, **or a book
+detail page** (Project Gutenberg, Goodreads, Amazon, Wikipedia,
+publisher catalog) in a browser. They invoke "Send to X4" through any
+of three surfaces:
 
 - **macOS Safari share sheet** — the native share button drops down
   options including "Send to X4."
 - **Safari Web Extension or Chrome extension** — right-click context menu
-  on a page, link, or selection.
-- **Toolbar popup** in either browser — explicit "Send this page" button.
+  on a page, link, or selection. Books also have a dedicated **"Send
+  book to X4"** entry in the context menu and the toolbar popup.
+- **Toolbar popup** in either browser — explicit "Send this page" and
+  "Send this page as a book" buttons.
 
-The captured article is converted to a single-chapter (or multi-chapter,
-for long pieces) EPUB tuned for the X4's 4.3" e-ink panel — with
-grayscale-dithered images and a stylesheet that matches the device's
-renderer. The EPUB lands in a local queue.
+For an article, the captured DOM is converted to a single-chapter (or
+multi-chapter, for long pieces) EPUB tuned for the X4's 4.3" e-ink panel
+— with grayscale-dithered images and a stylesheet that matches the
+device's renderer. The EPUB lands in a local queue.
+
+For a book page, the helper identifies the book (Claude, from URL +
+title + page-text snippet), looks it up on Anna's Archive (HTML-scraped
+search, EPUB-first), downloads via the member fast-download API,
+converts to EPUB if needed (pass-through for EPUB; Claude reflow for
+PDF; native TXT converter; Calibre as an optional fallback for MOBI /
+AZW3 / DJVU / etc.), embeds a cover from `og:image` (with Open Library
+ISBN fallback), and queues the result alongside articles. Clicking the
+plain "Send to X4" on a book detail page is also fine — the article
+path auto-detects book pages and reroutes.
 
 The user later puts the X4 into File Transfer mode (it joins WiFi and
 exposes an HTTP server on port 80). A background process on the Mac
@@ -291,9 +307,14 @@ Same-URL re-enqueue evicts the older pending/ready/building item *and*
 deletes its `.capture.json` and `.epub` from disk, so rapid re-clicks
 on Send to X4 don't pile up debris.
 
-Anthropic API key is stored in macOS Keychain under service
-`com.justingarner.sendtox4`, account `anthropic.api.key`. Never on disk
-in plaintext.
+API keys live in macOS Keychain under service `com.justingarner.sendtox4`:
+
+- `anthropic.api.key` — Claude polish + book identification + PDF reflow.
+- `annas-archive.api.key` — Anna's Archive member fast-download key.
+
+Neither key ever touches disk in plaintext. `tools/setkey.sh` and
+`tools/setaakey.sh` post them through the loopback daemon to the
+matching `/settings/...` route, which writes through to Keychain.
 
 ### 4.9 HTTP API (loopback)
 
@@ -303,15 +324,83 @@ GET  /status                  → { queueLength, x4Reachable, lastUploadAt, item
 POST /capture                 → enqueue Capture, signal worker
 POST /flush                   → trigger immediate upload attempt
 POST /settings/x4-ip          → { ip: "192.168.x.y" }
-POST /settings/api-key        → { key: "sk-ant-…" } (writes to Keychain)
+POST /settings/api-key        → { key: "sk-ant-…" } (Anthropic, Keychain)
+POST /settings/aa-key         → { key: "…" }         (Anna's Archive member key, Keychain)
 ```
 
 `Capture.id` is optional in the POST `/capture` body; the daemon mints
-a UUID when absent. Only `url` is strictly required. Browser
-extensions don't generate IDs — server owns them.
+a UUID when absent. Only `url` is strictly required. `Capture.kind`
+defaults to `"article"`; book captures POST `{ kind: "book", url, title,
+textContent (snippet ≤ 6 KB), lang, ogImage, … }`. Browser extensions
+don't generate IDs — server owns them.
 
 Default port `47821`, overridable with `SENDTOX4_PORT`. No auth. Loopback
 listening only.
+
+### 4.10 Book pipeline (`Capture.kind == .book`)
+
+A second pipeline runs alongside the article path. It's invoked when
+the browser sends `kind: "book"`, and also as an auto-detect at the top
+of the article path: clicking "Send to X4" on a book detail page calls
+`BookIdentifier` first, persists `kind = .book` to the queue manifest
+on a high-confidence match (≥ 0.75), and reroutes — so the user doesn't
+have to remember which menu entry to use.
+
+The chain (`SendToX4/Sources/Core/`):
+
+1. **`BookIdentifier.swift`** — Claude Sonnet 4.6 with `cache_control:
+   ephemeral` returns canonical `{ isBookPage, title, authors, isbn13,
+   lang, year, confidence }` from URL + page title + a 4 KB
+   page-text snippet. Conservative — confidence below 0.6 fails the
+   build with "not a book page" rather than guessing.
+2. **`AnnasArchive.swift`** — three responsibilities, one actor:
+   - **Mirror discovery.** AA domains rotate due to takedowns. Once per
+     daemon session, scrape Wikipedia's "Anna's Archive" page for
+     `annas-archive.<tld>` URLs, probe each, cache the first reachable
+     one. Hardcoded fallback list (`.org/.se/.li`) if Wikipedia is
+     unreachable.
+   - **Search.** AA exposes only the fast-download endpoint as JSON;
+     search is HTML-scraped. We do an EPUB-first pass (`?ext=epub`) so
+     popular books never need conversion, falling back to unfiltered
+     only if zero candidates. The parser reads format hints from both
+     rendered text and raw attribute values (alt/title/data-*) and
+     unwraps comment-deferred result rows.
+   - **Fast download.** `GET /dyn/api/fast_download.json?md5=…&key=…`
+     (member-key gated) returns the partner-server URL. The URL points
+     to the raw file bytes; we stream + return them.
+3. **`pickBest`** — composite score over format (EPUB → AZW3 → MOBI →
+   FB2 → DOCX → TXT → DJVU → PDF), language match, and size band.
+   Drops `format == "unknown"` candidates outright rather than
+   downloading an unidentifiable blob.
+4. **`BookConverter.swift`** — strategy chain over the downloaded bytes.
+   File-magic byte-sniffing overrides the search-page format claim so
+   "the bytes are EPUB" trumps "the row said unknown":
+   - **EPUB**: pass-through (`EpubCoverInjector` ensures cover, see below).
+   - **TXT**: native pure-Swift converter — paragraphs split on blank
+     lines, EpubWriter from there.
+   - **PDF**: Claude PDF understanding via `document` content blocks
+     returns structured chapters → EpubWriter. Better text reflow on
+     small e-ink than Calibre's PDF→EPUB. Calibre fallback if Claude
+     unavailable.
+   - **Everything else** (MOBI / AZW3 / DJVU / DOCX / FB2 / …): shell
+     out to Calibre's `ebook-convert` with `--cover` so it embeds our
+     cover instead of generating its placeholder. If Calibre isn't
+     installed, surfaces a clear actionable error rather than crashing.
+5. **`BookCoverFetcher.swift` + `EpubCoverInjector.swift`** — the cover.
+   Browser-side, the book extractor pulls `og:image`, `twitter:image`,
+   or Amazon's `#landingImage`/`#imgBlkFront` (resolving relative URLs).
+   Server-side, `BookCoverFetcher` falls back to Open Library covers
+   (`covers.openlibrary.org/b/isbn/<isbn>-L.jpg?default=false`,
+   no-auth, free). Image goes through `ImageProcessor` (grayscale +
+   Atkinson dither + fit to 480×800 — same pipeline as inline article
+   images) and is then attached: built EPUBs receive it via
+   `EpubWriter.Input.coverPNG`, pass-through EPUBs via
+   `EpubCoverInjector` (uses `/usr/bin/unzip` to extract, strips ALL
+   pre-existing cover declarations before patching ours in, repacks via
+   `ZipWriter` with mimetype STORED first per spec). Always replaces —
+   the og:image from the source page is virtually always better than
+   what's embedded (notably, AA carries many calibre 0.7.3 placeholder
+   covers from old uploads).
 
 ---
 
@@ -401,6 +490,55 @@ honor the structural HTML and a tiny subset of the CSS regardless. We
 write a clean stylesheet anyway because viewing in Books.app is
 how the user previews builds before sending.
 
+**D15. Anna's Archive over Project Gutenberg / OpenLibrary / etc.**
+AA is the only source that consistently has both modern paywalled books
+and public-domain classics in EPUB form, with a stable JSON API for
+downloads (member-key gated). Project Gutenberg has clean public-domain
+EPUBs but nothing copyrighted. Library Genesis is upstream of AA but
+worse to scrape. The trade-off is that AA's *search* has no JSON API —
+we HTML-scrape — and the active mirror domain rotates due to
+takedowns. We mitigate the rotation by scraping the Wikipedia page for
+the current canonical mirror list once per daemon session.
+
+**D16. EPUB-first search + byte-magic detection, not Calibre by default.**
+AA returns heterogeneous formats (EPUB / PDF / MOBI / AZW3 / DJVU / …).
+Two failure modes drove us away from Calibre as a hard dep: (a) it's a
+heavy install most users don't have, and (b) AA's search HTML
+sometimes hides format in attributes our scraper missed, leading to
+"format=unknown" downloads of mystery bytes. Filtering search to
+`?ext=epub` first means popular books never need conversion at all;
+byte-magic sniffing on the downloaded bytes (PK + `application/
+epub+zip` mimetype, `%PDF`, `BOOKMOBI`, `AT&TFORM`, `<FictionBook`,
+high-printable-ASCII for TXT) means the converter trusts the bytes
+over the search-page label. Native pure-Swift TXT converter for the
+trivial case. Calibre is now an optional fallback for the rare
+MOBI/AZW3/DJVU paths only, with a clear error if it's missing.
+
+**D17. Auto-detect book pages on the article path.**
+Clicking "Send to X4" on an Amazon book page should not produce an EPUB
+of the Amazon page chrome. The article path runs `BookIdentifier`
+before sanitize/polish; on a high-confidence yes (≥ 0.75, stricter than
+the explicit-book-click threshold of 0.6) it persists `kind = .book` to
+the queue manifest and reroutes to `buildBook`. Skipped without an
+Anthropic key — articles still work without an LLM key, the auto-route
+just doesn't fire.
+
+**D18. Replace book covers, don't merge.**
+AA EPUBs frequently carry placeholder covers (notably Calibre 0.7.3
+"stack of books with watermark"). The og:image we pull from the source
+page (Amazon / Goodreads / Gutenberg) is the canonical book cover. So
+`EpubCoverInjector` strips every pre-existing cover declaration from
+the OPF (`properties="cover-image"` tokens, `<meta name="cover">`,
+prior injections) before patching ours in. Always replaces. Falls back
+to leaving the EPUB untouched on any parse failure rather than
+producing a broken file.
+
+**D19. Reuse the article image pipeline for book covers.**
+Same `ImageProcessor` (grayscale + Atkinson dither + fit to 480×800)
+used for inline article images is used for book covers. Keeps the
+visual style consistent on the X4 panel, and we don't grow a second
+image pipeline.
+
 ---
 
 ## 6. Constraints we're working within
@@ -430,8 +568,9 @@ how the user previews builds before sending.
 (Pointers are repo paths from the project root.)
 
 **Browser**
-- ✅ Chrome MV3 extension — context menu (page/link/selection),
-  Readability injection, popup, queue status (`ChromeExtension/`).
+- ✅ Chrome MV3 extension — context menu (page/link/selection/book),
+  Readability injection, book-page extractor, popup, queue status
+  (`ChromeExtension/`).
 - ✅ Safari Web Extension target — same code as Chrome with
   Safari-specific manifest (`SafariWebExtension/`).
 - ✅ macOS Share Extension target — AppleScript bridge to Safari
@@ -442,8 +581,8 @@ how the user previews builds before sending.
   (`SendToX4/Sources/Daemon/HTTPServer.swift`).
 - ✅ Persistent queue, atomic JSON manifest
   (`Sources/Core/QueueStore.swift`).
-- ✅ Settings store + Keychain-backed API key
-  (`Sources/Core/SettingsStore.swift`).
+- ✅ Settings store + Keychain-backed API keys (Anthropic + Anna's
+  Archive member key) (`Sources/Core/SettingsStore.swift`).
 - ✅ HTML sanitizer with tag allowlist + empty-wrapper pruning
   (`Sources/Core/HTMLSanitizer.swift`).
 - ✅ Image processor: grayscale + Atkinson dither + resize
@@ -452,10 +591,15 @@ how the user previews builds before sending.
   (`Sources/Core/{ZipWriter,EpubWriter,X4Stylesheet}.swift`).
 - ✅ Claude Sonnet 4.6 polish with prompt caching + 95% guardrail
   (`Sources/Core/ClaudePolish.swift`).
+- ✅ Book pipeline: identification, AA mirror discovery + search +
+  fast download, byte-magic format detection, native TXT converter,
+  Claude PDF reflow, optional Calibre fallback, cover fetcher, OPF
+  cover injector
+  (`Sources/Core/{BookIdentifier,AnnasArchive,BookConverter,BookCoverFetcher,EpubCoverInjector,JSONHelpers}.swift`).
 - ✅ X4 client + probe + idempotent uploader
   (`Sources/Core/{X4Client,X4Probe,X4Uploader,LocalNetwork}.swift`).
-- ✅ End-to-end build pipeline glued together
-  (`Sources/Core/BuildPipeline.swift`).
+- ✅ End-to-end build pipeline glued together (article path + book
+  branch with auto-detect) (`Sources/Core/BuildPipeline.swift`).
 
 **App**
 - ✅ Menubar app shell — `MenuBarExtra` + Settings window — sources
@@ -464,16 +608,24 @@ how the user previews builds before sending.
 
 **Tooling**
 - ✅ Smoke test executable (`Sources/SmokeTest/main.swift`) that builds
-  a real EPUB and validates structure with `/usr/bin/unzip`.
-- ✅ `tools/setkey.sh` — Keychain-safe API key entry.
+  a real EPUB and validates structure with `/usr/bin/unzip`, plus
+  offline regression cases for the AA HTML parser, candidate ranker,
+  byte-magic format sniffer, and cover injector.
+- ✅ `tools/setkey.sh` — Keychain-safe Anthropic API key entry.
+- ✅ `tools/setaakey.sh` — Keychain-safe Anna's Archive member key entry.
 
 **Verification**
 - ✅ Smoke test passes: builds both a single-chapter and a multi-chapter
   EPUB, unzip accepts both, and the OPF spine asserts that the nav
-  document is included only when there's more than one chapter.
+  document is included only when there's more than one chapter; AA
+  parser + ranker + byte sniffer + cover-injector regression cases all
+  pass.
 - ✅ Daemon roundtrip verified end-to-end: POST `/capture` →
   HTMLSanitizer strips `<script>`/`<iframe>`/Subscribe-Share buttons →
   EPUB lands in `~/Library/Application Support/SendToX4/queue/`.
+- ✅ Book pipeline verified end-to-end on a real Amazon book page:
+  Send-to-X4 → BookIdentifier → AnnasArchive (EPUB-first) →
+  BookCoverFetcher (og:image) → EpubCoverInjector → queue.
 
 ---
 
@@ -513,15 +665,18 @@ how the user previews builds before sending.
 
 **Future, deliberately out of scope today**
 
-- PDF support — would need a separate Core Graphics + PDF rasterization
-  pipeline; the X4 renderer doesn't support PDFs anyway.
 - Long-book splitting into multi-volume EPUBs.
 - Cross-device queue sync (pretty much defeats the local-helper model).
 - Linux / Windows daemon — possible (the Core targets are mostly
-  Foundation), but `ImageProcessor` leans on AppKit / ImageIO. Would
-  need a replacement.
+  Foundation), but `ImageProcessor`, the Calibre shell-out, and the
+  `/usr/bin/unzip` calls in `EpubCoverInjector` lean on AppKit /
+  ImageIO + macOS-specific paths. Would need a replacement.
 - Send-to-Kindle reuse — different device, different format pipeline,
   but the same architecture would work.
+- Share Extension book mode — the macOS share sheet only sees the URL,
+  with no clean way to disambiguate "send article" vs. "send book"
+  without an extra UI step. Web extension book button is the only
+  surface for now.
 
 ---
 
@@ -591,12 +746,15 @@ In Chrome: `chrome://extensions` → Developer mode → Load unpacked →
 select `ChromeExtension/`.
 
 ```sh
-# Terminal 2 — set API key (optional; falls back to no-LLM)
-~/Desktop/code/send-to-x4/tools/setkey.sh
+# Terminal 2 — set API keys
+~/Desktop/code/send-to-x4/tools/setkey.sh     # Anthropic (optional for articles, required for books)
+~/Desktop/code/send-to-x4/tools/setaakey.sh   # Anna's Archive member key (required for books)
 ```
 
-Right-click any article → Send to X4. EPUB lands in
-`~/Library/Application Support/SendToX4/queue/`.
+Right-click any article → Send to X4 → EPUB lands in
+`~/Library/Application Support/SendToX4/queue/`. Right-click a book
+detail page → Send book to X4 → identification + AA download +
+conversion → same queue.
 
 **To build the Mac app + Safari + Share extensions**
 
