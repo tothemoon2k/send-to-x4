@@ -232,11 +232,17 @@ public enum EpubWriter {
             manifest += "<item id=\"\(img.id)\" href=\"\(img.filename)\" media-type=\"\(img.mediaType)\"/>\n"
         }
 
+        // The Navigation Document is required in the manifest by EPUB 3,
+        // but we only put it in the spine (i.e. show a TOC page) when there
+        // are multiple chapters — for a single-chapter article a TOC is
+        // pure noise.
         var spine = ""
         if input.coverPNG != nil {
             spine += "<itemref idref=\"cover\"/>\n"
         }
-        spine += "<itemref idref=\"nav\"/>\n"
+        if input.chapters.count > 1 {
+            spine += "<itemref idref=\"nav\"/>\n"
+        }
         for (i, _) in input.chapters.enumerated() {
             let id = String(format: "chapter-%03d", i + 1)
             spine += "<itemref idref=\"\(id)\"/>\n"

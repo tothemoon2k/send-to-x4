@@ -5,7 +5,6 @@ import Foundation
 ///   sanitize HTML
 ///     -> [optional] Claude polish (with prompt caching)
 ///     -> download + process images (grayscale, dither, resize)
-///     -> generate cover
 ///     -> assemble EPUB
 ///     -> attach to queue item
 public actor BuildPipeline {
@@ -143,14 +142,9 @@ public actor BuildPipeline {
             return EpubWriter.Chapter(title: heading, bodyHTML: html)
         }
 
-        // 4. Generate cover.
-        let cover = CoverGenerator.makePNG(.init(
-            title: polishedTitle,
-            author: polishedAuthor,
-            source: capture.siteName ?? URL(string: capture.url)?.host
-        ))
-
-        // 5. Assemble EPUB.
+        // 4. Assemble EPUB. No cover page — articles open straight into
+        //    the body. The TOC (nav) is included in the spine only when
+        //    there's more than one chapter; see EpubWriter.
         let lang = capture.lang?.nonEmpty ?? "en"
         var publishedDate: Date? = nil
         if let pub = capture.publishedTime {
@@ -165,7 +159,7 @@ public actor BuildPipeline {
             lang: lang,
             publishedTime: publishedDate,
             chapters: rewrittenChapters,
-            coverPNG: cover,
+            coverPNG: nil,
             images: images
         )
         let data = try EpubWriter.write(epubInput)
