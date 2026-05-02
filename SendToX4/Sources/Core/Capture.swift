@@ -54,6 +54,33 @@ public struct Capture: Codable, Sendable, Identifiable {
         self.referrer = referrer
         self.length = length
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, url, title, byline, siteName, lang, content, textContent
+        case excerpt, publishedTime, ogImage, capturedAt, source
+        case needsServerFetch, referrer, length
+    }
+
+    // Browser extensions don't generate an id — server mints one when absent.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.url = try c.decode(String.self, forKey: .url)
+        self.title = try c.decodeIfPresent(String.self, forKey: .title)
+        self.byline = try c.decodeIfPresent(String.self, forKey: .byline)
+        self.siteName = try c.decodeIfPresent(String.self, forKey: .siteName)
+        self.lang = try c.decodeIfPresent(String.self, forKey: .lang)
+        self.content = try c.decodeIfPresent(String.self, forKey: .content)
+        self.textContent = try c.decodeIfPresent(String.self, forKey: .textContent)
+        self.excerpt = try c.decodeIfPresent(String.self, forKey: .excerpt)
+        self.publishedTime = try c.decodeIfPresent(String.self, forKey: .publishedTime)
+        self.ogImage = try c.decodeIfPresent(String.self, forKey: .ogImage)
+        self.capturedAt = try c.decodeIfPresent(Date.self, forKey: .capturedAt) ?? Date()
+        self.source = try c.decodeIfPresent(String.self, forKey: .source)
+        self.needsServerFetch = try c.decodeIfPresent(Bool.self, forKey: .needsServerFetch)
+        self.referrer = try c.decodeIfPresent(String.self, forKey: .referrer)
+        self.length = try c.decodeIfPresent(Int.self, forKey: .length)
+    }
 }
 
 public enum QueueItemStatus: String, Codable, Sendable {
