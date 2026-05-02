@@ -60,9 +60,48 @@ public actor BuildPipeline {
         public var warning: String?
     }
 
+    public enum BuildError: Swift.Error, CustomStringConvertible {
+        case notABook(reason: String)
+        case noCandidates(query: String)
+        case missingAnnasArchiveKey
+
+        public var description: String {
+            switch self {
+            case .notABook(let reason): return "Page is not a book page (\(reason))"
+            case .noCandidates(let q):  return "No download candidates from Anna's Archive for query: \(q)"
+            case .missingAnnasArchiveKey: return "Anna's Archive member key is not set in Settings."
+            }
+        }
+    }
+
     private func build(item: QueueItem) async throws -> BuildOutcome {
+        switch item.capture.kind {
+        case .article: return try await buildArticle(item: item)
+        case .book:    return try await buildBook(item: item)
+        }
+    }
+
+    private func buildArticle(item: QueueItem) async throws -> BuildOutcome {
         let capture = item.capture
         let baseURL = URL(string: capture.url)
+        let snapshot = settings.snapshot
+
+        // 0. Auto-detect: if the user hit "Send to X4" on a book detail page
+        //    (Amazon /dp/, Goodreads /book/show/, Project Gutenberg /ebooks/,
+        //    a publisher catalog page, …) we'd otherwise produce an EPUB of
+        //    the page chrome. Ask the model first; on a high-confidence yes,
+        //    persist the kind change and reroute to the book pipeline.
+        //    Skipped without a Claude key — no way to classify, and the
+        //    article path stays useful for users without an LLM key.
+        if snapshot.llmEnabled, settings.anthropicAPIKey() != nil {
+            if let identified = await detectBookPage(capture), identified.confidence >= 0.75 {
+                log("[build] auto-routing book page (\(capture.url)): \(identified.title) conf=\(String(format: "%.2f", identified.confidence))")
+                try? await queue.update(id: item.id) { $0.capture.kind = .book }
+                var rerouted = item
+                rerouted.capture.kind = .book
+                return try await buildBook(item: rerouted, prefetched: identified)
+            }
+        }
 
         // 1. Sanitize.
         let rawHTML = capture.content ?? ""
@@ -77,7 +116,6 @@ public actor BuildPipeline {
         ]
         var fellBack = false
 
-        let snapshot = settings.snapshot
         if snapshot.llmEnabled, settings.anthropicAPIKey() != nil {
             do {
                 let polished = try await ClaudePolish.polish(.init(
@@ -171,11 +209,15 @@ public actor BuildPipeline {
     }
 
     private func epubFilename(for item: QueueItem, title: String) -> String {
+        epubFilename(for: item, title: title, fallbackStem: "article")
+    }
+
+    private func epubFilename(for item: QueueItem, title: String, fallbackStem: String) -> String {
         let base = title.lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         let trimmed = String(base.prefix(40))
-        let stem = trimmed.isEmpty ? "article" : trimmed
+        let stem = trimmed.isEmpty ? fallbackStem : trimmed
         // Short stable suffix for collision-resistance — strip dashes so
         // filenames don't end up with double separators.
         let suffix = item.id
@@ -183,6 +225,98 @@ public actor BuildPipeline {
             .replacingOccurrences(of: "_", with: "")
             .prefix(6)
         return "\(stem)-\(suffix).epub"
+    }
+
+    // MARK: - Book branch
+
+    /// Best-effort "is this URL really a book detail page?" classifier used
+    /// by the article path to auto-route. Returns nil on any failure (missing
+    /// key, model error, empty snippet) — callers fall through to the article
+    /// path so a flaky classifier never blocks normal captures.
+    private func detectBookPage(_ capture: Capture) async -> BookIdentifier.Identified? {
+        let snippet = capture.textContent?.nonEmpty
+            ?? capture.excerpt?.nonEmpty
+            ?? String((capture.content ?? "").prefix(8000))
+        guard !snippet.isEmpty else { return nil }
+        do {
+            let id = try await BookIdentifier.identify(.init(
+                url: capture.url,
+                title: capture.title,
+                lang: capture.lang,
+                snippet: snippet
+            ))
+            return id.isBookPage ? id : nil
+        } catch {
+            log("[detect-book] skipped: \(error)")
+            return nil
+        }
+    }
+
+    private func buildBook(item: QueueItem, prefetched: BookIdentifier.Identified? = nil) async throws -> BuildOutcome {
+        let cap = item.capture
+        log("[book] identify: \(cap.url)")
+
+        // 1. Identify the book (skip if the article path already did it).
+        let identified: BookIdentifier.Identified
+        if let prefetched {
+            identified = prefetched
+        } else {
+            do {
+                identified = try await BookIdentifier.identify(.init(
+                    url: cap.url,
+                    title: cap.title,
+                    lang: cap.lang,
+                    snippet: cap.textContent ?? cap.excerpt ?? ""
+                ))
+            } catch BookIdentifier.Error.missingAPIKey {
+                throw BuildError.notABook(reason: "Anthropic API key not set — needed to identify the book")
+            }
+        }
+        guard identified.isBookPage else {
+            throw BuildError.notABook(reason: "model said this isn't a single-book page")
+        }
+        guard identified.confidence >= 0.6 else {
+            throw BuildError.notABook(reason: "low confidence \(String(format: "%.2f", identified.confidence))")
+        }
+        log("[book] identified: \(identified.title) — \(identified.authors.joined(separator: ", "))  conf=\(String(format: "%.2f", identified.confidence))")
+
+        // 2. Resolve the active Anna's Archive mirror.
+        let mirror = try await AnnasArchive.shared.resolveMirror()
+        log("[book] mirror: \(mirror.host ?? "?")")
+
+        // 3. Search candidates.
+        let query = ([identified.title] + identified.authors.prefix(1))
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let candidates = try await AnnasArchive.shared.search(query: query, preferredLang: identified.lang)
+        guard let best = AnnasArchive.pickBest(candidates, preferredLang: identified.lang) else {
+            throw BuildError.noCandidates(query: query)
+        }
+        log("[book] picked: format=\(best.format) size=\(best.sizeBytes ?? 0)B lang=\(best.lang ?? "?") md5=\(best.md5)")
+
+        // 4. Resolve fast download URL (member key required).
+        guard let key = settings.annasArchiveAPIKey(), !key.isEmpty else {
+            throw BuildError.missingAnnasArchiveKey
+        }
+        let downloadURL = try await AnnasArchive.shared.fastDownloadURL(md5: best.md5, key: key)
+
+        // 5. Download bytes.
+        let raw = try await AnnasArchive.shared.downloadFile(downloadURL)
+        log("[book] downloaded \(raw.count) bytes from \(downloadURL.host ?? "?")")
+
+        // 6. Convert if needed.
+        let hint = BookConverter.Hint(
+            title: identified.title,
+            authors: identified.authors,
+            lang: identified.lang ?? cap.lang,
+            sourceURL: cap.url,
+            identifier: "urn:send-to-x4:\(item.id)"
+        )
+        let epubData = try await BookConverter.toEPUB(raw, format: best.format, hint: hint)
+        log("[book] EPUB ready: \(epubData.count) bytes")
+
+        let filename = epubFilename(for: item, title: identified.title, fallbackStem: "book")
+        return BuildOutcome(filename: filename, data: epubData, warning: nil)
     }
 
     private func log(_ message: String) {

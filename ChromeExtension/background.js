@@ -3,6 +3,7 @@ import { CAPTURE_ENDPOINT } from "./config.js";
 const MENU_ID_PAGE = "send-to-x4-page";
 const MENU_ID_LINK = "send-to-x4-link";
 const MENU_ID_SELECTION = "send-to-x4-selection";
+const MENU_ID_BOOK = "send-to-x4-book";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -23,6 +24,12 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["selection"],
     documentUrlPatterns: ["http://*/*", "https://*/*"]
   });
+  chrome.contextMenus.create({
+    id: MENU_ID_BOOK,
+    title: "Send book to X4",
+    contexts: ["page"],
+    documentUrlPatterns: ["http://*/*", "https://*/*"]
+  });
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -31,6 +38,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       await captureLink(info.linkUrl, tab);
     } else if (info.menuItemId === MENU_ID_SELECTION) {
       await captureSelection(tab, info.selectionText);
+    } else if (info.menuItemId === MENU_ID_BOOK) {
+      await captureBook(tab);
     } else {
       await capturePage(tab);
     }
@@ -57,6 +66,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true; // async response
+  }
+  if (msg?.type === "capture-active-tab-as-book") {
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then(([tab]) => captureBook(tab))
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 });
 
@@ -88,6 +105,35 @@ async function capturePage(tab) {
     ...result
   });
   notifyQueued(result.title || tab.title || tab.url);
+}
+
+async function captureBook(tab) {
+  if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) {
+    throw new Error("This page can't be captured.");
+  }
+
+  // Pull a small page-text snippet — Readability is overkill for book ID,
+  // and book detail pages (Goodreads, Amazon, Gutenberg) often have
+  // metadata that Readability would discard as chrome.
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: extractBookSnippetInPage
+  });
+  if (!result || result.error) {
+    throw new Error(result?.error || "Couldn't read page.");
+  }
+
+  await postCapture({
+    kind: "book",
+    url: tab.url,
+    capturedAt: new Date().toISOString(),
+    source: "book",
+    title: result.title,
+    lang: result.lang,
+    textContent: result.snippet,
+    siteName: result.siteName
+  });
+  notifyQueued("book: " + (result.title || tab.title || tab.url));
 }
 
 async function captureLink(url, tab) {
@@ -157,6 +203,21 @@ function extractInPage() {
         article.publishedTime || meta("article:published_time") || meta("og:article:published_time"),
       ogImage: meta("og:image"),
       length: article.length
+    };
+  } catch (e) {
+    return { error: String(e?.message || e) };
+  }
+}
+
+function extractBookSnippetInPage() {
+  try {
+    return {
+      title: document.title || null,
+      lang: document.documentElement.lang || null,
+      siteName: location.hostname,
+      // 6 KB is enough for the LLM to recognize the book; saves tokens
+      // vs sending the whole DOM.
+      snippet: (document.body?.innerText || "").slice(0, 6000)
     };
   } catch (e) {
     return { error: String(e?.message || e) };

@@ -172,7 +172,7 @@ public enum ClaudePolish {
         guard let textBlock = envelope.content.first(where: { $0.type == "text" })?.text else {
             throw Error.decodeError("no text block in response")
         }
-        let trimmed = stripJSONFence(textBlock)
+        let trimmed = JSONHelpers.stripJSONFence(textBlock)
 
         guard let payloadData = trimmed.data(using: .utf8) else {
             throw Error.decodeError("payload not utf-8")
@@ -216,21 +216,6 @@ public enum ClaudePolish {
     }
 
     // MARK: - Helpers
-
-    private static func stripJSONFence(_ s: String) -> String {
-        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.hasPrefix("```") {
-            // Strip leading fence (optionally with `json` language tag) and trailing fence.
-            if let firstNewline = t.firstIndex(of: "\n") {
-                t = String(t[t.index(after: firstNewline)...])
-            }
-            if t.hasSuffix("```") {
-                t = String(t.dropLast(3))
-            }
-            t = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return t
-    }
 
     private static func wordCount(in html: String) -> Int {
         // Crude but adequate: strip tags, split on whitespace.

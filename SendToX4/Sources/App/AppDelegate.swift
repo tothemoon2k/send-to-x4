@@ -71,6 +71,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .json(["ok": true])
         }
 
+        server.route("POST", "/settings/aa-key") { req in
+            struct R: Decodable { let key: String }
+            let r = try JSONDecoder().decode(R.self, from: req.body)
+            try SettingsStore.shared.setAnnasArchiveAPIKey(r.key)
+            return .json(["ok": true])
+        }
+
         do {
             try server.start()
             self.server = server

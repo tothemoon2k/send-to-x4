@@ -60,15 +60,32 @@ public final class SettingsStore: @unchecked Sendable {
         return try JSONDecoder().decode(Snapshot.self, from: data)
     }
 
-    // MARK: - Anthropic API key (Keychain)
+    // MARK: - Keychain-backed API keys
 
-    private static let keychainAccount = "anthropic.api.key"
+    private static let anthropicAccount = "anthropic.api.key"
+    private static let annasArchiveAccount = "annas-archive.api.key"
 
     public func anthropicAPIKey() -> String? {
+        readKeychain(account: Self.anthropicAccount)
+    }
+
+    public func setAnthropicAPIKey(_ key: String?) throws {
+        try writeKeychain(account: Self.anthropicAccount, value: key)
+    }
+
+    public func annasArchiveAPIKey() -> String? {
+        readKeychain(account: Self.annasArchiveAccount)
+    }
+
+    public func setAnnasArchiveAPIKey(_ key: String?) throws {
+        try writeKeychain(account: Self.annasArchiveAccount, value: key)
+    }
+
+    private func readKeychain(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: AppPaths.bundleId,
-            kSecAttrAccount as String: Self.keychainAccount,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -80,22 +97,22 @@ public final class SettingsStore: @unchecked Sendable {
         return str
     }
 
-    public func setAnthropicAPIKey(_ key: String?) throws {
+    private func writeKeychain(account: String, value: String?) throws {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: AppPaths.bundleId,
-            kSecAttrAccount as String: Self.keychainAccount
+            kSecAttrAccount as String: account
         ]
         // Always remove first; SecItemUpdate is fussy on some macOS versions.
         SecItemDelete(baseQuery as CFDictionary)
-        guard let key = key, !key.isEmpty else { return }
+        guard let value = value, !value.isEmpty else { return }
         var attrs = baseQuery
-        attrs[kSecValueData as String] = key.data(using: .utf8)!
+        attrs[kSecValueData as String] = value.data(using: .utf8)!
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         let status = SecItemAdd(attrs as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw NSError(domain: "SendToX4.Keychain", code: Int(status), userInfo: [
-                NSLocalizedDescriptionKey: "Failed to save API key (OSStatus \(status))"
+                NSLocalizedDescriptionKey: "Failed to save key for \(account) (OSStatus \(status))"
             ])
         }
     }

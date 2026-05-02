@@ -68,6 +68,13 @@ server.route("POST", "/settings/api-key") { req in
     return .json(["ok": true])
 }
 
+server.route("POST", "/settings/aa-key") { req in
+    struct Req: Decodable { let key: String }
+    let r = try JSONDecoder().decode(Req.self, from: req.body)
+    try SettingsStore.shared.setAnnasArchiveAPIKey(r.key)
+    return .json(["ok": true])
+}
+
 // MARK: - Worker loop
 
 // Fires when there's potential work (capture arrived, /flush hit, tick).

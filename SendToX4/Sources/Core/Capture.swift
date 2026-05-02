@@ -1,8 +1,18 @@
 import Foundation
 
-/// One article captured from the browser, ready to be turned into an EPUB.
+public enum CaptureKind: String, Codable, Sendable {
+    case article
+    case book
+}
+
+/// One thing captured from the browser, ready to be turned into an EPUB.
+/// Discriminated by `kind`: an `.article` is sanitized + polished + EPUB-built
+/// here; a `.book` triggers identification → Anna's Archive lookup → download
+/// → optional conversion. Article fields are still used for books to pass the
+/// LLM context (page title, page text snippet) for identification.
 public struct Capture: Codable, Sendable, Identifiable {
     public var id: String
+    public var kind: CaptureKind
     public var url: String
     public var title: String?
     public var byline: String?
@@ -14,13 +24,14 @@ public struct Capture: Codable, Sendable, Identifiable {
     public var publishedTime: String?
     public var ogImage: String?
     public var capturedAt: Date
-    public var source: String? // "page" | "link" | "selection"
+    public var source: String? // "page" | "link" | "selection" | "book"
     public var needsServerFetch: Bool?
     public var referrer: String?
     public var length: Int?
 
     public init(
         id: String = UUID().uuidString,
+        kind: CaptureKind = .article,
         url: String,
         title: String? = nil,
         byline: String? = nil,
@@ -38,6 +49,7 @@ public struct Capture: Codable, Sendable, Identifiable {
         length: Int? = nil
     ) {
         self.id = id
+        self.kind = kind
         self.url = url
         self.title = title
         self.byline = byline
@@ -56,15 +68,17 @@ public struct Capture: Codable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, url, title, byline, siteName, lang, content, textContent
+        case id, kind, url, title, byline, siteName, lang, content, textContent
         case excerpt, publishedTime, ogImage, capturedAt, source
         case needsServerFetch, referrer, length
     }
 
     // Browser extensions don't generate an id — server mints one when absent.
+    // `kind` defaults to .article so older clients (that don't send it) keep working.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.kind = try c.decodeIfPresent(CaptureKind.self, forKey: .kind) ?? .article
         self.url = try c.decode(String.self, forKey: .url)
         self.title = try c.decodeIfPresent(String.self, forKey: .title)
         self.byline = try c.decodeIfPresent(String.self, forKey: .byline)

@@ -97,4 +97,78 @@ require(r2.opf.contains("<itemref idref=\"nav\"/>"),
         "multi-chapter must include nav in the spine")
 require(!r2.listing.contains("OEBPS/cover.png"), "multi-chapter must not have cover.png")
 
-print("PASS — EPUB structure looks good")
+// Case 3: Anna's Archive search-HTML parser. Offline fixture so the test
+// can run without network. Fixture mimics two result rows with the kinds of
+// metadata strings AA actually surfaces.
+let aaFixture = """
+<html><body>
+<a href="/md5/d6e1dc51a50726f00ec438af21952a45" class="js-vim-focus custom-a flex items-center relative left-[-10px] w-[calc(100%+20px)] px-[10px] py-2 hover:bg-black hover:bg-opacity-[0.05] focus-visible:outline focus-visible:outline-2">
+  <div>
+    <div lang="en">English [en], epub, .epub, 1.6MB, <strong>Pride and Prejudice</strong>, Jane Austen</div>
+  </div>
+</a>
+<!-- some pages defer rows inside HTML comments -->
+<!--
+<a href="/md5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" class="…">
+  <div>Russian [ru], pdf, 12.3MB, Преступление и наказание, Фёдор Достоевский</div>
+</a>
+-->
+<a href="/md5/0123456789abcdef0123456789abcdef" class="…">
+  <div>English, azw3, 2.0MB, Sapiens, Yuval Noah Harari</div>
+</a>
+</body></html>
+"""
+let aaCandidates = AnnasArchive.parseSearchHTML(Data(aaFixture.utf8), preferredLang: "en")
+require(aaCandidates.count == 3, "expected 3 candidates, got \(aaCandidates.count)")
+require(aaCandidates[0].md5 == "d6e1dc51a50726f00ec438af21952a45", "first md5 wrong")
+require(aaCandidates[0].format == "epub", "first format wrong: \(aaCandidates[0].format)")
+require(aaCandidates[0].lang == "en", "first lang wrong: \(aaCandidates[0].lang ?? "nil")")
+require((aaCandidates[0].sizeBytes ?? 0) > 1_500_000, "first size wrong: \(aaCandidates[0].sizeBytes ?? 0)")
+require(aaCandidates[1].format == "pdf", "comment-unwrapped format wrong: \(aaCandidates[1].format)")
+require(aaCandidates[2].format == "azw3", "third format wrong: \(aaCandidates[2].format)")
+
+let best = AnnasArchive.pickBest(aaCandidates, preferredLang: "en")
+require(best?.md5 == "d6e1dc51a50726f00ec438af21952a45",
+        "ranker should pick the EPUB English candidate; picked \(best?.md5 ?? "nil")")
+
+// Case 4: ranker must drop unknown-format candidates. If the parser couldn't
+// pin a format, we'd rather fail with "no candidates" than ship random bytes
+// to the converter — that was the Amazon → Odyssey regression.
+let onlyUnknown = [
+    AnnasArchive.Candidate(md5: "deadbeef0123456789abcdef00000000", format: "unknown",
+                           sizeBytes: 1_000_000, lang: "en", title: nil, authors: nil, sourceText: "")
+]
+require(AnnasArchive.pickBest(onlyUnknown, preferredLang: "en") == nil,
+        "ranker must reject unknown-format-only candidate sets")
+
+// Case 5: format detection from attribute values (alt/title/data-*). Real
+// AA HTML hides the format in attributes that stripTags would otherwise
+// discard, so the parser has to peek at the raw inner HTML too.
+let attrFixture = """
+<html><body>
+<a href="/md5/00000000000000000000000000000001" class="…">
+  <img alt="EPUB cover">
+  <div lang="en">English, 1.2MB, Some Book</div>
+</a>
+</body></html>
+"""
+let attrCandidates = AnnasArchive.parseSearchHTML(Data(attrFixture.utf8), preferredLang: "en")
+require(attrCandidates.first?.format == "epub",
+        "parser must read format from attribute values when text doesn't carry it; got \(attrCandidates.first?.format ?? "nil")")
+
+// Case 6: byte-magic format sniffing. Identify a real EPUB and a PDF from
+// just their first bytes. (TXT is harder to fixture meaningfully; skip.)
+let epubBytes = r1.data       // produced by the case-1 smoke EPUB build
+require(BookConverter.sniffFormat(bytes: epubBytes) == "epub",
+        "sniffer must recognize a real EPUB by its mimetype entry")
+
+var pdfBytes = Data("%PDF-1.4\n%âãÏÓ\n1 0 obj\n<</Type/Catalog>>".utf8)
+pdfBytes.append(Data(repeating: 0x20, count: 100))
+require(BookConverter.sniffFormat(bytes: pdfBytes) == "pdf",
+        "sniffer must recognize PDF magic")
+
+let txtBytes = Data("Just plain ASCII text, paragraph one.\n\nParagraph two.\n".utf8)
+require(BookConverter.sniffFormat(bytes: txtBytes) == "txt",
+        "sniffer must recognize plain TXT")
+
+print("PASS — EPUB structure looks good; AA parser + ranker green; byte-sniffer green")
