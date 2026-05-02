@@ -171,4 +171,97 @@ let txtBytes = Data("Just plain ASCII text, paragraph one.\n\nParagraph two.\n".
 require(BookConverter.sniffFormat(bytes: txtBytes) == "txt",
         "sniffer must recognize plain TXT")
 
-print("PASS — EPUB structure looks good; AA parser + ranker green; byte-sniffer green")
+// Case 7: EpubCoverInjector — pass-through + idempotency behavior.
+require(EpubCoverInjector.hasCover(#"<package><manifest><item properties="cover-image"/></manifest></package>"#),
+        "hasCover must detect EPUB-3 cover-image property")
+require(EpubCoverInjector.hasCover(#"<package><metadata><meta name="cover" content="x"/></metadata></package>"#),
+        "hasCover must detect EPUB-2 <meta name='cover'>")
+require(!EpubCoverInjector.hasCover(#"<package><manifest><item href="ch1.xhtml"/></manifest></package>"#),
+        "hasCover must NOT trigger on a coverless OPF")
+
+require(EpubCoverInjector.parseOPFPath(#"<rootfile full-path="OEBPS/content.opf" media-type="…"/>"#) == "OEBPS/content.opf",
+        "parseOPFPath must extract the OPF path from container.xml")
+
+let unpatched = """
+<?xml version="1.0"?>
+<package version="3.0">
+  <metadata><dc:title>Test</dc:title></metadata>
+  <manifest>
+    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>
+"""
+let patched = EpubCoverInjector.patchOPF(unpatched)
+require(patched.contains(#"properties="cover-image""#),
+        "patched OPF must declare cover-image property")
+require(patched.contains(#"<itemref idref="stx4-cover" linear="yes"/>"#),
+        "patched OPF must add cover spine itemref")
+require(patched.contains(#"<meta name="cover" content="stx4-cover-image"/>"#),
+        "patched OPF must add EPUB-2 cover meta hint")
+require(EpubCoverInjector.hasCover(patched),
+        "round-trip: patched OPF must now report a cover")
+
+// 7b: end-to-end — feed the smoke-built coverless EPUB through the injector,
+// confirm the output unzips cleanly and the OPF now has cover entries.
+let coverless = r1.data
+// The injector doesn't validate PNG contents, so an opaque blob is fine here.
+let injectedCoverPNG = Data(repeating: 0x77, count: 8192)
+let withCover = EpubCoverInjector.ensureCover(coverless, coverPNG: injectedCoverPNG, title: "Smoke Cover", lang: "en")
+// Note: re-zipping at default deflate level can produce a smaller archive than
+// the original even after we add cover assets — a uniform-byte cover.png
+// compresses to almost nothing. So we don't assert size; we assert structure.
+require(withCover.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]), "result must still be a valid ZIP")
+require(BookConverter.sniffFormat(bytes: withCover) == "epub", "result must still pass the EPUB sniff")
+
+let injURL = outDir.appendingPathComponent("with-cover.epub")
+try withCover.write(to: injURL)
+let listProc = Process()
+listProc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+listProc.arguments = ["-l", injURL.path]
+let listPipe = Pipe()
+listProc.standardOutput = listPipe
+listProc.standardError = Pipe()
+try listProc.run()
+listProc.waitUntilExit()
+let injListing = String(data: listPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+require(injListing.contains("OEBPS/cover.png"), "injected EPUB must contain cover.png; got:\n\(injListing)")
+require(injListing.contains("OEBPS/cover.xhtml"), "injected EPUB must contain cover.xhtml")
+
+// 7c: replace-not-skip semantics — if the EPUB already declares a cover
+// (the placeholder-Calibre-cover regression we hit in the wild), injecting
+// again with a different PNG must REPLACE, not skip. We verify by injecting
+// with new bytes and confirming the OPF still has exactly one cover-image
+// item with our injected id, plus no duplicate spine itemref.
+let replacementCoverPNG = Data(repeating: 0xCC, count: 8192)
+let replaced = EpubCoverInjector.ensureCover(withCover, coverPNG: replacementCoverPNG, title: "Smoke Cover", lang: "en")
+require(replaced.prefix(4) == Data([0x50, 0x4B, 0x03, 0x04]), "replacement output must still be a valid ZIP")
+
+// Inspect the replacement OPF — one cover-image declaration only.
+let replURL = outDir.appendingPathComponent("replaced-cover.epub")
+try replaced.write(to: replURL)
+let opfDump = Process()
+opfDump.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+opfDump.arguments = ["-p", replURL.path, "OEBPS/content.opf"]
+let opfPipe = Pipe()
+opfDump.standardOutput = opfPipe
+opfDump.standardError = Pipe()
+try opfDump.run()
+opfDump.waitUntilExit()
+let replacedOPF = String(data: opfPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+let coverImageCount = replacedOPF.components(separatedBy: "properties=\"cover-image\"").count - 1
+require(coverImageCount == 1, "exactly one properties='cover-image' must remain after replacement; got \(coverImageCount)")
+let coverItemrefCount = replacedOPF.components(separatedBy: "idref=\"stx4-cover\"").count - 1
+require(coverItemrefCount == 1, "exactly one stx4-cover spine itemref must remain after replacement; got \(coverItemrefCount)")
+
+// 7d: stripExistingCover targets only cover-image, leaves other properties.
+let mixedProps = #"<item href="nav.xhtml" properties="nav cover-image"/>"#
+let cleaned = EpubCoverInjector.stripExistingCover(mixedProps)
+require(cleaned.contains(#"properties="nav""#),
+        "stripExistingCover must keep other property tokens; got \(cleaned)")
+require(!cleaned.contains("cover-image"),
+        "stripExistingCover must drop the cover-image token; got \(cleaned)")
+
+print("PASS — EPUB structure looks good; AA parser + ranker green; byte-sniffer green; cover injector green")

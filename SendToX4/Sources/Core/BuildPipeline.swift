@@ -233,6 +233,23 @@ public actor BuildPipeline {
     /// by the article path to auto-route. Returns nil on any failure (missing
     /// key, model error, empty snippet) — callers fall through to the article
     /// path so a flaky classifier never blocks normal captures.
+    /// Fetches a cover from og:image / Open Library and runs it through the
+    /// X4-tuned image pipeline (grayscale + Atkinson dither + fit to 480×800).
+    /// Returns nil if no cover could be sourced or the processing failed —
+    /// the caller falls through to "no cover" silently rather than failing
+    /// the whole build.
+    private func fetchAndProcessCover(ogImage: String?, isbn13: String?) async -> Data? {
+        guard let raw = await BookCoverFetcher.fetch(ogImageURL: ogImage, isbn13: isbn13) else {
+            return nil
+        }
+        do {
+            return try ImageProcessor.process(raw).pngData
+        } catch {
+            log("[book] cover process failed: \(error)")
+            return nil
+        }
+    }
+
     private func detectBookPage(_ capture: Capture) async -> BookIdentifier.Identified? {
         let snippet = capture.textContent?.nonEmpty
             ?? capture.excerpt?.nonEmpty
@@ -304,7 +321,21 @@ public actor BuildPipeline {
         let raw = try await AnnasArchive.shared.downloadFile(downloadURL)
         log("[book] downloaded \(raw.count) bytes from \(downloadURL.host ?? "?")")
 
-        // 6. Convert if needed.
+        // 6. Source a cover image. Done in parallel with the download in
+        //    spirit — we await it here, but the og:image is usually a tiny
+        //    JPEG and Open Library is fast.
+        let processedCover = await fetchAndProcessCover(
+            ogImage: cap.ogImage,
+            isbn13: identified.isbn13
+        )
+        if processedCover != nil {
+            log("[book] cover sourced (\(processedCover!.count) bytes after dither)")
+        } else {
+            log("[book] no cover sourced — pass-through EPUBs will keep their existing cover, others will ship without one")
+        }
+
+        // 7. Convert if needed; pass the cover so converted paths embed it
+        //    natively and pass-through EPUBs get one injected only when missing.
         let hint = BookConverter.Hint(
             title: identified.title,
             authors: identified.authors,
@@ -312,7 +343,7 @@ public actor BuildPipeline {
             sourceURL: cap.url,
             identifier: "urn:send-to-x4:\(item.id)"
         )
-        let epubData = try await BookConverter.toEPUB(raw, format: best.format, hint: hint)
+        let epubData = try await BookConverter.toEPUB(raw, format: best.format, hint: hint, coverPNG: processedCover)
         log("[book] EPUB ready: \(epubData.count) bytes")
 
         let filename = epubFilename(for: item, title: identified.title, fallbackStem: "book")

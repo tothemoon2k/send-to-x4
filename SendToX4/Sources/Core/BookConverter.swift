@@ -42,7 +42,7 @@ public enum BookConverter {
         }
     }
 
-    public static func toEPUB(_ bytes: Data, format: String, hint: Hint) async throws -> Data {
+    public static func toEPUB(_ bytes: Data, format: String, hint: Hint, coverPNG: Data? = nil) async throws -> Data {
         // Trust the bytes, not the search-page label. AA's HTML sometimes
         // mis-tags a row, and our scraper can also miss the format hint —
         // detecting from file magic gets us the truth.
@@ -54,24 +54,35 @@ public enum BookConverter {
 
         switch detected {
         case "epub":
-            return bytes
+            // Pass-through. Inject a cover only if the EPUB doesn't already
+            // have one — most AA EPUBs do, and re-injection over an existing
+            // cover risks duplicate spine entries.
+            guard let coverPNG else { return bytes }
+            return EpubCoverInjector.ensureCover(bytes, coverPNG: coverPNG, title: hint.title, lang: hint.lang ?? "en")
         case "txt":
-            return try convertTXT(bytes, hint: hint)
+            return try convertTXT(bytes, hint: hint, coverPNG: coverPNG)
         case "pdf":
             // Claude PDF reflow first (better than Calibre on small e-ink for
             // text-heavy PDFs). Calibre as a last resort if Claude is unavailable.
             do {
-                return try await convertPDFViaClaude(bytes, hint: hint)
+                return try await convertPDFViaClaude(bytes, hint: hint, coverPNG: coverPNG)
             } catch {
                 fputs("[converter] Claude PDF reflow failed (\(error)); trying Calibre as fallback\n", stderr)
-                return try convertViaCalibre(bytes, format: detected, hint: hint)
+                let calibreOut = try convertViaCalibre(bytes, format: detected, hint: hint, coverPNG: coverPNG)
+                guard let coverPNG else { return calibreOut }
+                // Belt-and-braces: Calibre's --cover usually works, but if
+                // anything slipped through (older Calibre, weird input)
+                // ensureCover will replace whatever's there.
+                return EpubCoverInjector.ensureCover(calibreOut, coverPNG: coverPNG, title: hint.title, lang: hint.lang ?? "en")
             }
         default:
             // MOBI / AZW3 / DJVU / DOCX / FB2 etc. — Calibre is the only
             // open-source option that handles these accurately. We surface a
             // clear, actionable error if it's not installed instead of
             // dropping the user into a cryptic "convert failed" state.
-            return try convertViaCalibre(bytes, format: detected, hint: hint)
+            let calibreOut = try convertViaCalibre(bytes, format: detected, hint: hint, coverPNG: coverPNG)
+            guard let coverPNG else { return calibreOut }
+            return EpubCoverInjector.ensureCover(calibreOut, coverPNG: coverPNG, title: hint.title, lang: hint.lang ?? "en")
         }
     }
 
@@ -136,7 +147,7 @@ public enum BookConverter {
 
     // MARK: - TXT → EPUB (native, no external deps)
 
-    private static func convertTXT(_ bytes: Data, hint: Hint) throws -> Data {
+    private static func convertTXT(_ bytes: Data, hint: Hint, coverPNG: Data? = nil) throws -> Data {
         // Try UTF-8, fall back to latin-1 so we don't choke on older TXT
         // dumps (Project Gutenberg ships some files in ISO-8859-1).
         let text = String(data: bytes, encoding: .utf8)
@@ -163,7 +174,7 @@ public enum BookConverter {
             lang: hint.lang ?? "en",
             publishedTime: nil,
             chapters: [.init(title: hint.title, bodyHTML: html)],
-            coverPNG: nil,
+            coverPNG: coverPNG,
             images: []
         )
         return try EpubWriter.write(input)
@@ -177,7 +188,7 @@ public enum BookConverter {
 
     // MARK: - PDF → Claude → EpubWriter
 
-    private static func convertPDFViaClaude(_ bytes: Data, hint: Hint) async throws -> Data {
+    private static func convertPDFViaClaude(_ bytes: Data, hint: Hint, coverPNG: Data? = nil) async throws -> Data {
         guard let key = SettingsStore.shared.anthropicAPIKey(), !key.isEmpty else {
             throw Error.claudePDFFailed("Anthropic API key not set")
         }
@@ -277,7 +288,7 @@ public enum BookConverter {
             lang: hint.lang ?? "en",
             publishedTime: nil,
             chapters: payload.chapters.map { .init(title: $0.heading, bodyHTML: $0.html) },
-            coverPNG: nil,
+            coverPNG: coverPNG,
             images: []
         )
         return try EpubWriter.write(input)
@@ -321,7 +332,7 @@ public enum BookConverter {
         return URL(fileURLWithPath: path)
     }
 
-    private static func convertViaCalibre(_ bytes: Data, format: String, hint: Hint) throws -> Data {
+    private static func convertViaCalibre(_ bytes: Data, format: String, hint: Hint, coverPNG: Data? = nil) throws -> Data {
         guard let calibre = locateCalibre() else {
             throw Error.noConverterAvailable(
                 format: format,
@@ -347,6 +358,13 @@ public enum BookConverter {
         }
         if let lang = hint.lang, !lang.isEmpty {
             args.append(contentsOf: ["--language", lang])
+        }
+        // Provide our cover so Calibre embeds it instead of generating its
+        // default "stack of books with calibre 0.x watermark" placeholder.
+        if let coverPNG {
+            let coverURL = tmp.appendingPathComponent("cover.png")
+            try coverPNG.write(to: coverURL, options: [.atomic])
+            args.append(contentsOf: ["--cover", coverURL.path])
         }
         // Output in EPUB 3 — newer EPUBs have better reflow and the X4
         // accepts both 2 and 3 (per CrossPoint renderer docs).

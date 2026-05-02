@@ -131,7 +131,8 @@ async function captureBook(tab) {
     title: result.title,
     lang: result.lang,
     textContent: result.snippet,
-    siteName: result.siteName
+    siteName: result.siteName,
+    ogImage: result.ogImage
   });
   notifyQueued("book: " + (result.title || tab.title || tab.url));
 }
@@ -211,10 +212,37 @@ function extractInPage() {
 
 function extractBookSnippetInPage() {
   try {
+    const meta = (name) =>
+      document.querySelector(`meta[property="${name}"]`)?.getAttribute("content") ||
+      document.querySelector(`meta[name="${name}"]`)?.getAttribute("content") ||
+      null;
+
+    // Cover candidates, in priority order:
+    //   1. og:image (Goodreads, Project Gutenberg, most publishers)
+    //   2. twitter:image
+    //   3. the largest <img> on the page (Amazon: #landingImage / #imgBlkFront)
+    let cover = meta("og:image") || meta("twitter:image");
+    if (!cover) {
+      const candidates = [
+        document.querySelector("#landingImage"),
+        document.querySelector("#imgBlkFront"),
+        document.querySelector("img[itemprop='image']")
+      ].filter(Boolean);
+      const fromIds = candidates[0];
+      if (fromIds) {
+        cover = fromIds.getAttribute("data-old-hires") || fromIds.src || null;
+      }
+    }
+    // Resolve relative URLs against the document.
+    if (cover) {
+      try { cover = new URL(cover, location.href).toString(); } catch { /* leave as-is */ }
+    }
+
     return {
       title: document.title || null,
       lang: document.documentElement.lang || null,
       siteName: location.hostname,
+      ogImage: cover,
       // 6 KB is enough for the LLM to recognize the book; saves tokens
       // vs sending the whole DOM.
       snippet: (document.body?.innerText || "").slice(0, 6000)
