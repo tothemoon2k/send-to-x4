@@ -1,0 +1,106 @@
+# XcodeGen project definition. Generates SendToX4.xcodeproj from this file.
+#
+# Prerequisites:
+#   - Xcode (full IDE) installed
+#   - sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+#   - brew install xcodegen
+#
+# Usage:
+#   xcodegen generate
+#   open SendToX4.xcodeproj
+
+name: SendToX4
+options:
+  bundleIdPrefix: com.justingarner.sendtox4
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    GENERATE_INFOPLIST_FILE: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    DEAD_CODE_STRIPPING: YES
+    OTHER_LDFLAGS: -ObjC
+
+packages:
+  SendToX4Core:
+    path: .
+
+targets:
+  SendToX4:
+    type: application
+    platform: macOS
+    sources:
+      - path: SendToX4/Sources/App
+      - path: SendToX4/Resources
+        optional: true
+    dependencies:
+      - package: SendToX4Core
+        product: SendToX4Core
+      - target: SafariWebExtension
+        embed: true
+      - target: ShareExtension
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4
+        PRODUCT_NAME: "Send to X4"
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_CFBundleDisplayName: "Send to X4"
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: "Send to X4 reads the current Safari page so it can be packaged as an EPUB for your Xteink X4."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Send to X4 uploads EPUBs to your Xteink X4 over your local Wi-Fi network."
+        CODE_SIGN_ENTITLEMENTS: SendToX4/SendToX4.entitlements
+        CODE_SIGN_STYLE: Automatic
+
+  SafariWebExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - SafariWebExtension/SafariWebExtensionHandler.swift
+    resources:
+      - SafariWebExtension/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4.SafariWebExtension
+        PRODUCT_NAME: SafariWebExtension
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: SafariWebExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SafariWebExtension/SafariWebExtension.entitlements
+        SKIP_INSTALL: YES
+    dependencies: []
+    info:
+      path: SafariWebExtension/Info.plist
+
+  ShareExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - ShareExtension/ShareViewController.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4.ShareExtension
+        PRODUCT_NAME: ShareExtension
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
+        SKIP_INSTALL: YES
+    dependencies: []
+    info:
+      path: ShareExtension/Info.plist
+
+schemes:
+  SendToX4:
+    build:
+      targets:
+        SendToX4: all
+        SafariWebExtension: all
+        ShareExtension: all
+    run:
+      config: Debug
+    archive:
+      config: Release
