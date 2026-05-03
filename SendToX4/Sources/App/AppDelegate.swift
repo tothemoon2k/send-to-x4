@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let capture = try JSONDecoder.iso.decode(Capture.self, from: req.body)
                 let item = try await QueueStore.shared.enqueue(capture)
                 signal.continuation.yield(())
-                return .json(["ok": true, "id": item.id])
+                return .json(CaptureAck(ok: true, id: item.id))
             } catch {
                 return .error(400, "Invalid capture: \(error.localizedDescription)")
             }
@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.route("POST", "/flush") { _ in
             signal.continuation.yield(())
             let n = await QueueStore.shared.pendingCount()
-            return .json(["ok": true, "queued": n])
+            return .json(FlushAck(ok: true, queued: n))
         }
 
         server.route("POST", "/settings/x4-ip") { req in
@@ -116,9 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func statusResponse() async -> HTTPServer.Response {
         let queue = await QueueStore.shared.all()
+        let x4Reachable = await AppState.shared.x4Reachable
         let summary = StatusJSON(
             queueLength: queue.filter { $0.status != .uploaded && $0.status != .failed }.count,
-            x4Reachable: AppState.shared.x4Reachable,
+            x4Reachable: x4Reachable,
             lastUploadAt: queue.compactMap { $0.status == .uploaded ? $0.updatedAt : nil }.max(),
             items: queue.map {
                 .init(id: $0.id, title: $0.capture.title ?? $0.capture.url, status: $0.status, attempts: $0.attempts, error: $0.lastError)
