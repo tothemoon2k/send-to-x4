@@ -29,6 +29,24 @@ loop — `Sources/Daemon/main.swift` and `Sources/App/AppDelegate.swift`
 register near-identical routes. **Keep them in sync** when changing
 the HTTP API.
 
+The `HTTPServer` class and `StatusModels` (`CaptureAck`, `FlushAck`,
+`StatusJSON`) live under `Sources/Daemon/` but are *shared*: the
+SwiftPM `sendtox4d` executable target compiles the whole directory,
+and the XcodeGen app target compiles the same directory with
+`main.swift` excluded (see `project.yml` → `targets.SendToX4.sources`).
+Don't move them into Core — `HTTPServer` imports `Network.framework`
+and is server-flavored, not part of the conversion library; keeping
+it in `Daemon/` and reusing it via the path-with-excludes is the
+deliberate seam.
+
+**Don't add `info: { path: ... }` blocks under the Safari/Share
+extension targets in `project.yml`.** That tells XcodeGen to *generate*
+the Info.plist from scratch on every `xcodegen generate`, silently
+clobbering the hand-crafted `NSExtension` dict (which is what makes
+macOS recognize them as a Web Extension / Share Extension at all).
+The extension targets use `INFOPLIST_FILE: <path>` only; the build
+copies the file as-is.
+
 ## Common commands
 
 ```sh

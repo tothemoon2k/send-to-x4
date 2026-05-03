@@ -205,7 +205,12 @@ re-fetch) cannot.
 ### 4.3 Mac helper app (`SendToX4/Sources/App/`)
 
 SwiftUI menubar app. Configured as `LSUIElement` so there's no Dock
-icon. Targets macOS 14.
+icon. Targets macOS 14. The Xcode target also compiles
+`Sources/Daemon/HTTPServer.swift` and `Sources/Daemon/StatusModels.swift`
+(via `project.yml`'s `sources:` with `main.swift` excluded), so the
+HTTP server, `Request/Response` types, and ack structs (`CaptureAck`,
+`FlushAck`, `StatusJSON`) are physically the same code as the headless
+daemon — only route registration is duplicated.
 
 - `SendToX4App.swift` — `@main`, `MenuBarExtra` + `Settings` scene.
 - `AppDelegate.swift` — boots the embedded HTTP server, the worker

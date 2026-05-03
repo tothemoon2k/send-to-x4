@@ -36,6 +36,9 @@ targets:
     platform: macOS
     sources:
       - path: SendToX4/Sources/App
+      - path: SendToX4/Sources/Daemon
+        excludes:
+          - "main.swift"
       - path: SendToX4/Resources
         optional: true
     dependencies:
@@ -49,6 +52,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4
         PRODUCT_NAME: "Send to X4"
+        GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_CFBundleDisplayName: "Send to X4"
@@ -73,8 +77,6 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SafariWebExtension/SafariWebExtension.entitlements
         SKIP_INSTALL: YES
     dependencies: []
-    info:
-      path: SafariWebExtension/Info.plist
 
   ShareExtension:
     type: app-extension
@@ -90,8 +92,6 @@ targets:
         CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
         SKIP_INSTALL: YES
     dependencies: []
-    info:
-      path: ShareExtension/Info.plist
 
 schemes:
   SendToX4:
@@ -102,5 +102,9 @@ schemes:
         ShareExtension: all
     run:
       config: Debug
+      executable: SendToX4
+    profile:
+      config: Release
+      executable: SendToX4
     archive:
       config: Release
