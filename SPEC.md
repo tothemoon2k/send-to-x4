@@ -1,16 +1,17 @@
 # Send to X4 — Specification
 
 A "Send to X4" pipeline for the Xteink X4 e-reader. Right-click any web
-article *or any book detail page* in Chrome or Safari (or use the macOS
-share sheet), and a clean, typographically tuned EPUB lands on the
-device the next time it enters File Transfer mode. For book pages
-("Send book to X4") the helper identifies the book via Claude, fetches
-it from Anna's Archive, and converts to EPUB if needed.
+article in Chrome or Safari and a clean, typographically tuned EPUB
+lands on the device the next time it enters File Transfer mode.
 
-Status as of 2026-05-02: pipeline end-to-end functional via the headless
-daemon + Chrome extension. Mac app, Safari Web Extension, and Share
-Extension targets are written but require Xcode + XcodeGen + signing to
-build (see "Build & run").
+Status as of 2026-05-03: pipeline end-to-end functional via the headless
+daemon plus Chrome and Safari extensions. The book pipeline (Claude
+identification → Anna's Archive → cover-injected EPUB) is implemented
+and active in the daemon, but the browser surfaces are intentionally
+articles-only for now — the "Send book to X4" menu entry, the link /
+selection menu entries, and the macOS Share Extension target have all
+been retired (see § 4.2 / D10 for the share-sheet rationale and § 4.1
+for the simplified extension surface).
 
 ---
 
@@ -18,33 +19,29 @@ build (see "Build & run").
 
 ### What it does
 
-The user is reading an essay, blog post, longform piece, **or a book
-detail page** (Project Gutenberg, Goodreads, Amazon, Wikipedia,
-publisher catalog) in a browser. They invoke "Send to X4" through any
-of three surfaces:
+The user is reading an essay, blog post, or longform piece in a
+browser. They invoke "Send to X4" through one of two surfaces:
 
-- **macOS Safari share sheet** — the native share button drops down
-  options including "Send to X4."
-- **Safari Web Extension or Chrome extension** — right-click context menu
-  on a page, link, or selection. Books also have a dedicated **"Send
-  book to X4"** entry in the context menu and the toolbar popup.
-- **Toolbar popup** in either browser — explicit "Send this page" and
-  "Send this page as a book" buttons.
+- **Safari Web Extension or Chrome extension** — right-click context
+  menu on a page; the only entry is "Send to X4" (no submenu).
+- **Toolbar popup** in either browser — a single "Send this page"
+  button alongside the queue/X4-status readout.
 
-For an article, the captured DOM is converted to a single-chapter (or
-multi-chapter, for long pieces) EPUB tuned for the X4's 4.3" e-ink panel
-— with grayscale-dithered images and a stylesheet that matches the
-device's renderer. The EPUB lands in a local queue.
+The captured DOM is converted to a single-chapter (or multi-chapter,
+for long pieces) EPUB tuned for the X4's 4.3" e-ink panel — with
+grayscale-dithered images and a stylesheet that matches the device's
+renderer. The EPUB lands in a local queue.
 
-For a book page, the helper identifies the book (Claude, from URL +
-title + page-text snippet), looks it up on Anna's Archive (HTML-scraped
-search, EPUB-first), downloads via the member fast-download API,
-converts to EPUB if needed (pass-through for EPUB; Claude reflow for
-PDF; native TXT converter; Calibre as an optional fallback for MOBI /
-AZW3 / DJVU / etc.), embeds a cover from `og:image` (with Open Library
-ISBN fallback), and queues the result alongside articles. Clicking the
-plain "Send to X4" on a book detail page is also fine — the article
-path auto-detects book pages and reroutes.
+The book pipeline still exists in the daemon and is automatically
+exercised when the article path's `BookIdentifier` returns a
+high-confidence yes on a book detail page (Amazon `/dp/`, Goodreads
+`/book/show/`, Project Gutenberg, …). On a book hit it reroutes to the
+book pipeline (Claude identification → Anna's Archive HTML-scraped
+search → member fast-download → EPUB pass-through / Claude PDF reflow
+/ native TXT / optional Calibre fallback → cover injection from
+`og:image` with Open Library ISBN fallback). The user-facing menu
+entry that used to invoke this directly was removed; the auto-detect
+path is the only way it fires today.
 
 The user later puts the X4 into File Transfer mode (it joins WiFi and
 exposes an HTTP server on port 80). A background process on the Mac
@@ -119,20 +116,12 @@ These facts shape every design decision below.
 │  Browser (Safari / Chrome)                                    │
 │                                                               │
 │  Content script — Mozilla Readability runs on rendered DOM    │
-│  Background — context menu + toolbar action                   │
+│  Background — single "Send to X4" context-menu entry          │
 │  Captures: { url, title, byline, content (XHTML), … }         │
-└────────────┬───────────────────────────────────┬──────────────┘
-             │ POST /capture                     │ macOS share sheet
-             │ (JSON, loopback)                  │ (URL only)
-             ▼                                   ▼
-                                        ┌────────────────┐
-                                        │ ShareExtension │
-                                        │ AppleScript →  │
-                                        │ outerHTML from │
-                                        │ front Safari   │
-                                        └────────┬───────┘
-                                                 │ POST /capture
-                                                 ▼
+└──────────────────────────┬────────────────────────────────────┘
+                           │ POST /capture
+                           │ (JSON, loopback)
+                           ▼
 ┌───────────────────────────────────────────────────────────────┐
 │  Mac helper app (menubar) — listens on 127.0.0.1:47821        │
 │                                                               │
@@ -155,9 +144,9 @@ These facts shape every design decision below.
                    Xteink X4 (HTTP, port 80, no auth)
 ```
 
-**Process model.** All three browser/share entry points POST to the same
-loopback HTTP daemon. The daemon owns persistence, conversion, probing,
-and upload. There is no cloud component. Everything works offline except
+**Process model.** Both browser entry points POST to the same loopback
+HTTP daemon. The daemon owns persistence, conversion, probing, and
+upload. There is no cloud component. Everything works offline except
 the optional Claude polish call.
 
 ---
@@ -170,37 +159,36 @@ Both Chrome (`ChromeExtension/`) and Safari Web Extension
 (`SafariWebExtension/Resources/`) are the same Manifest V3 codebase:
 
 - `manifest.json` — MV3, with Safari adding `browser_specific_settings`.
-- `background.js` — registers context-menu items (`page`, `link`,
-  `selection`), handles clicks via `chrome.scripting.executeScript`
-  injection of `lib/Readability.js`, runs extraction in the page's
-  isolated world, POSTs the result to the daemon.
+- `background.js` — registers a single context-menu item (`page`),
+  handles clicks via `chrome.scripting.executeScript` injection of
+  `lib/Readability.js`, runs extraction in the page's isolated world,
+  POSTs the result to the daemon. Calls
+  `chrome.contextMenus.removeAll()` before `create()` on `onInstalled`
+  so older menu IDs (book / link / selection) are evicted on update.
 - `content extraction` — `Readability(document.cloneNode(true)).parse()`,
   augmented with a few `<meta>` lookups (og:image, published time).
 - `popup.html` / `popup.js` — toolbar UI showing queue length, X4
-  reachability, last upload time, and a "Send this page" button.
+  reachability, last upload time, and a single "Send this page" button.
 - `lib/Readability.js` — Mozilla's Readability, vendored.
 
 The Safari and Chrome extensions are byte-for-byte identical other than
-the `manifest.json`'s `browser_specific_settings` key.
+the `manifest.json`'s `browser_specific_settings` key. Today the
+extensions only surface article capture; the link, selection, and book
+menu entries that used to live here were removed (see § 5 / D10 for
+the rationale and § 8 for revival notes).
 
-### 4.2 Share Extension (`ShareExtension/`)
+### 4.2 Share Extension (removed)
 
-A macOS Share Extension target that appears in the system share sheet
-(matching the screenshot the user shared). Its principal class is
-`ShareViewController`:
-
-1. Reads the shared URL from `NSExtensionContext.inputItems`.
-2. Runs an AppleScript against Safari that walks `windows`, finds the
-   tab whose URL matches, and runs `do JavaScript "document.documentElement.outerHTML"`
-   in it. Falls back to `front document` if no match.
-3. POSTs the captured HTML to the loopback daemon at `/capture`.
-4. Calls `completeRequest`.
-
-The trade-off: AppleScript automation needs a one-time user grant
-("System Settings → Privacy & Security → Automation") for our app to
-control Safari. We accept this because we get the user's
-authenticated, JS-rendered DOM, which the alternative (server-side
-re-fetch) cannot.
+A macOS Share Extension target previously surfaced "Send to X4" in
+Safari's native share sheet by AppleScript-driving Safari to read
+`document.documentElement.outerHTML` from the matching tab. It was
+removed in 2026-05 — the AppleScript path required two separate
+permission grants (Privacy & Security → Automation, plus Safari →
+Develop → Allow JavaScript from Apple Events) and silently failed
+when either was missing, with no surfaced error to the user. The
+`ShareExtension/` source directory is left in the tree for reference
+but is not built or embedded by `project.yml`. See decision **D10**
+for the longer story.
 
 ### 4.3 Mac helper app (`SendToX4/Sources/App/`)
 
@@ -212,13 +200,24 @@ HTTP server, `Request/Response` types, and ack structs (`CaptureAck`,
 `FlushAck`, `StatusJSON`) are physically the same code as the headless
 daemon — only route registration is duplicated.
 
-- `SendToX4App.swift` — `@main`, `MenuBarExtra` + `Settings` scene.
+- `SendToX4App.swift` — `@main`. Declares only the `Settings` scene;
+  the menu-bar item is set up in `AppDelegate` (see below).
 - `AppDelegate.swift` — boots the embedded HTTP server, the worker
   task, and the probe ticker on launch. Same routes as the headless
-  `sendtox4d` daemon; the menubar app *is* the daemon.
-- `MenuView.swift` — popup showing X4 reachability dot, queue list,
-  per-item status icon (pending / building / ready / uploading /
-  uploaded / failed), "Send queue now" + "Settings" + "Quit" footer.
+  `sendtox4d` daemon; the menubar app *is* the daemon. Also creates
+  an `NSStatusItem` (rather than using `MenuBarExtra`, which doesn't
+  expose a right-click menu): left-click toggles an `NSPopover`
+  hosting `MenuView`, right-click pops an `NSMenu` containing
+  Settings… and Quit.
+- `MenuView.swift` — the popover content. X4 reachability dot at the
+  top, then a Spotify-style queue list: per-row 44-pt thumbnail (from
+  `Capture.ogImage` via `AsyncImage`, with a `book.closed` /
+  `doc.text` placeholder), title above subtitle (byline → siteName
+  fallback) in a lighter gray, error text in red below if any, and a
+  small monospaced status word (`queued` / `building` / `ready` /
+  `sending` / `sent` / `failed`) on the right. No footer — Settings
+  and Quit are reachable only via the right-click menu on the status
+  item.
 - `SettingsView.swift` — last-known IP, probe interval, subnet scan
   toggle, LLM toggle, Anthropic API key (writes through to Keychain).
 - `AppState.swift` — `@MainActor` `ObservableObject` polling
@@ -475,13 +474,21 @@ subnet scan is the fallback for when the user's router reassigned the
 DHCP lease. We tell the user in Settings to set a DHCP reservation —
 that's the real fix, but the scan handles the case where they haven't.
 
-**D10. Three capture surfaces, but the Web Extension is the reliable one.**
-The macOS share sheet only gets the URL. To preserve auth/paywall
-context we re-enter Safari via AppleScript. That works but requires the
-user to grant Automation permission once. The Web Extension flow has
-no such permission step. We ship both because the user explicitly
-wanted the share-sheet UX, but the Web Extension is the path we steer
-power users toward.
+**D10. Web Extension is the only capture surface; the macOS Share
+Extension was removed.** The native share sheet only hands the
+extension a URL, so to recover the rendered DOM we previously had the
+Share Extension AppleScript-drive Safari (`do JavaScript "…outerHTML"`
+in the matching tab). That worked but required *two* opt-ins —
+Automation permission for our app to control Safari (System Settings
+→ Privacy & Security → Automation), AND Safari's "Allow JavaScript
+from Apple Events" toggle (Develop menu) — both with no first-class
+discoverability and no surfaced error path when either was off. The
+share-sheet UX kept silently no-op'ing for users who hadn't found
+both toggles. We removed the Share Extension entirely (2026-05) and
+now lean on the Web Extension exclusively, which has no permission
+gates beyond the host-permission grant. The `ShareExtension/`
+directory is preserved on disk so the AppleScript shape is
+recoverable if we ever revisit.
 
 **D11. Swift menubar over Go daemon.**
 Considered Go for a single-binary helper. Swift wins because (a) the
@@ -571,8 +578,6 @@ image pipeline.
 - **EPUB-only**: the device rejects PDFs and raw HTML. PDFs would be a
   separate render pipeline; not in scope.
 - **Renderer drops most CSS**: we lean on tags + structural elements.
-- **macOS share sheet requires native bundle**: a pure WebExtension
-  cannot populate it. Hence the Share Extension target.
 - **Xcode + signing required for the Mac app**: the user has Xcode but
   needs to switch `xcode-select` and install `xcodegen`. Not blocking
   the Chrome-extension-only path.
@@ -587,13 +592,14 @@ image pipeline.
 (Pointers are repo paths from the project root.)
 
 **Browser**
-- ✅ Chrome MV3 extension — context menu (page/link/selection/book),
-  Readability injection, book-page extractor, popup, queue status
+- ✅ Chrome MV3 extension — single page-context "Send to X4" entry,
+  Readability injection, popup with queue status
   (`ChromeExtension/`).
 - ✅ Safari Web Extension target — same code as Chrome with
-  Safari-specific manifest (`SafariWebExtension/`).
-- ✅ macOS Share Extension target — AppleScript bridge to Safari
-  (`ShareExtension/`).
+  Safari-specific manifest, bundled into the menubar app's `.appex`
+  (`SafariWebExtension/`).
+- 🗄️  macOS Share Extension — retired (see § 4.2 / D10). Source kept
+  in `ShareExtension/` for reference; not built.
 
 **Daemon / pipeline**
 - ✅ Localhost HTTP server, loopback-only, JSON in/out
@@ -621,9 +627,15 @@ image pipeline.
   branch with auto-detect) (`Sources/Core/BuildPipeline.swift`).
 
 **App**
-- ✅ Menubar app shell — `MenuBarExtra` + Settings window — sources
-  written, builds via Xcode (`Sources/App/`).
-- ✅ XcodeGen `project.yml` for app + Safari + Share targets.
+- ✅ Menubar app shell — manual `NSStatusItem` (left-click popover,
+  right-click NSMenu) + SwiftUI `Settings` scene; queue list rendered
+  Spotify-style (thumbnail + title above subtitle) (`Sources/App/`).
+- ✅ XcodeGen `project.yml` for app + Safari Web Extension targets.
+  Web-extension assets are listed individually under the target's
+  `sources:` with `buildPhase: resources` (top-level files) and
+  `type: folder` (`icons/`, `lib/`); the deceptively-named
+  `resources:` target field is *not* a real XcodeGen key and ships
+  an empty `.appex` if used (cf. CLAUDE.md).
 
 **Tooling**
 - ✅ Smoke test executable (`Sources/SmokeTest/main.swift`) that builds
@@ -655,13 +667,11 @@ image pipeline.
 - Switch `xcode-select` to full Xcode and install `xcodegen` so the Mac
   app and extension targets actually build.
 - Run `xcodegen generate` and configure signing (Apple Developer Team)
-  for all three targets in Xcode.
+  for both targets in Xcode.
 - First-run UX: detect missing API key / missing X4 IP and offer a
   guided Settings panel.
 - Test on the actual X4 device (the upload path is unexercised against
   real hardware).
-- Validate the AppleScript permission grant flow on first share-sheet
-  use.
 
 **Quality**
 
@@ -692,10 +702,16 @@ image pipeline.
   ImageIO + macOS-specific paths. Would need a replacement.
 - Send-to-Kindle reuse — different device, different format pipeline,
   but the same architecture would work.
-- Share Extension book mode — the macOS share sheet only sees the URL,
-  with no clean way to disambiguate "send article" vs. "send book"
-  without an extra UI step. Web extension book button is the only
-  surface for now.
+- Reviving the "Send book to X4" browser entry — the daemon-side book
+  pipeline (BookIdentifier → Anna's Archive → cover-injected EPUB) is
+  fully implemented and exercised by the article path's auto-detect
+  on book pages. Re-adding the menu entry + popup button is a small,
+  deliberately-deferred UX change (we want to use articles-only for a
+  while before re-introducing it).
+- Reviving the macOS Share Extension — see D10. Would need both
+  Automation and "Allow JavaScript from Apple Events" granted, plus
+  surfaced errors when either toggle is off, before this is worth
+  shipping again.
 
 ---
 

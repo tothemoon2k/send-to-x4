@@ -19,9 +19,11 @@ The repo splits into two parallel build systems intentionally:
   `sendtox4-smoke` (EPUB pipeline smoke test). Compiles with the
   Command Line Tools alone; useful for fast iteration.
 - **XcodeGen** (`project.yml`) — generates `SendToX4.xcodeproj` with
-  three targets: the menubar app, the Safari Web Extension, and the
-  Share Extension. Requires the full Xcode and depends on the SwiftPM
-  package via `packages: SendToX4Core: { path: . }`.
+  two targets: the menubar app and the Safari Web Extension. Requires
+  the full Xcode and depends on the SwiftPM package via
+  `packages: SendToX4Core: { path: . }`. (The macOS Share Extension
+  target was removed; the directory `ShareExtension/` still exists but
+  isn't built — see SPEC § 4.2 / decision D10.)
 
 Both worlds share the same `SendToX4Core` source tree. The headless
 daemon and the menubar app both wrap it with HTTP routes plus a worker
@@ -39,13 +41,24 @@ and is server-flavored, not part of the conversion library; keeping
 it in `Daemon/` and reusing it via the path-with-excludes is the
 deliberate seam.
 
-**Don't add `info: { path: ... }` blocks under the Safari/Share
-extension targets in `project.yml`.** That tells XcodeGen to *generate*
-the Info.plist from scratch on every `xcodegen generate`, silently
+**Don't add `info: { path: ... }` blocks under the Safari extension
+target in `project.yml`.** That tells XcodeGen to *generate* the
+Info.plist from scratch on every `xcodegen generate`, silently
 clobbering the hand-crafted `NSExtension` dict (which is what makes
-macOS recognize them as a Web Extension / Share Extension at all).
-The extension targets use `INFOPLIST_FILE: <path>` only; the build
-copies the file as-is.
+macOS recognize it as a Web Extension at all). The extension target
+uses `INFOPLIST_FILE: <path>` only; the build copies the file as-is.
+
+**Don't put web-extension assets under a `resources:` key in
+`project.yml`** — that key is *not* a valid XcodeGen target field,
+it's silently ignored, and the resulting `.appex` ships with an empty
+`Resources/` (Safari then loads what looks like a stub extension).
+The working pattern is to list each top-level web file under
+`sources:` with `buildPhase: resources`, and add subfolders (`icons/`,
+`lib/`) as `type: folder` so their hierarchy is preserved verbatim
+under `Contents/Resources/`. Don't reach for `path:
+SafariWebExtension/Resources, type: folder` either — that nests a
+`Resources/` *inside* the bundle's `Resources/` and Safari can't find
+the manifest.
 
 ## Common commands
 
@@ -161,29 +174,34 @@ the build fails with a clear actionable error. When Calibre IS
 invoked, ALWAYS pass `--cover <path>` so it embeds our cover instead
 of generating its placeholder.
 
-**Three browser surfaces, one daemon.** Chrome extension
-(`ChromeExtension/`), Safari Web Extension
-(`SafariWebExtension/Resources/`), and macOS Share Extension
-(`ShareExtension/`) all POST to the same loopback `/capture` endpoint.
-Chrome and Safari extensions are byte-for-byte identical except for
-`manifest.json`'s `browser_specific_settings`. **Keep their JS
-in sync** — if you fix a bug in one, copy it to the other. The book
-flow has its own context-menu entry (`MENU_ID_BOOK = "send-to-x4-book"`)
-and popup button; both POST `{ kind: "book", url, title, textContent
-(snippet ≤ 6 KB), lang, ogImage, … }`. Share Extension is article-only
-(see SPEC § 8 "out of scope").
+**Two browser surfaces, one daemon.** Chrome extension
+(`ChromeExtension/`) and Safari Web Extension
+(`SafariWebExtension/Resources/`) both POST to the same loopback
+`/capture` endpoint. They are byte-for-byte identical except for
+`manifest.json`'s `browser_specific_settings`. **Keep their JS in
+sync** — if you fix a bug in one, copy it to the other. Today both
+expose only the page-context "Send to X4" entry (no link, selection,
+or book menu items, no book popup button); the underlying book
+pipeline still exists in the daemon (auto-detect on book pages still
+fires when an Anthropic key is set) but no browser UI surfaces it.
+`background.js` calls `chrome.contextMenus.removeAll()` before
+`create()` on `onInstalled` so old menu IDs (book/link/selection)
+evict cleanly when the extension updates.
 
 **The daemon owns capture IDs.** `Capture.init(from:)` mints a fresh
 UUID when the JSON omits `id`; only `url` is strictly required.
 Browser extensions don't generate IDs — don't tighten that contract
-without updating all three clients. (The original Chrome bug was the
+without updating both clients. (The original Chrome bug was the
 synthesized decoder rejecting browser POSTs for missing `id`.)
 
-**The Share Extension uses AppleScript to read Safari's live DOM**
-(`ShareExtension/ShareViewController.swift`). This is deliberate, not
-expedient — see decision D10 in SPEC.md. Re-fetching URLs server-side
-loses paywall/auth/JS-rendering, which is the whole point of capturing
-in the user's browser.
+**The menubar app uses `NSStatusItem`, not `MenuBarExtra`.**
+`SendToX4App.swift` declares only the `Settings` scene; the status
+item is created manually in `AppDelegate.setupStatusItem` so we can
+distinguish left- vs right-click. Left-click toggles an `NSPopover`
+hosting `MenuView`; right-click pops an `NSMenu` with Settings… and
+Quit via the `statusItem.menu = menu; sender.performClick(nil);
+statusItem.menu = nil` pattern. Don't move Settings/Quit back into the
+popover — the popover is the queue list only, no chrome.
 
 **Device discovery is two-step, intentionally.** The X4 has no mDNS,
 no auth, dynamic DHCP. `X4Probe.locate()` tries the last-known IP first
