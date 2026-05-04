@@ -67,8 +67,22 @@ targets:
     platform: macOS
     sources:
       - SafariWebExtension/SafariWebExtensionHandler.swift
-    resources:
-      - SafariWebExtension/Resources
+      - path: SafariWebExtension/Resources/manifest.json
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/background.js
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/config.js
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/popup.html
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/popup.js
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/icons
+        type: folder
+        buildPhase: resources
+      - path: SafariWebExtension/Resources/lib
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4.SafariWebExtension
