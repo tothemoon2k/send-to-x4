@@ -40,60 +40,117 @@ public actor X4Uploader {
         var skipped = 0
         var failed = 0
 
-        // Pre-fetch the device's file list once for idempotency checks.
-        let existing: [String: Int] = await {
-            do {
-                let files = try await X4Client.listFiles(ip: ip, path: "/")
-                var dict: [String: Int] = [:]
-                for f in files {
-                    if let size = f.size { dict[f.name] = size }
-                }
-                return dict
-            } catch {
-                return [:]
-            }
-        }()
-
+        // Group ready items by destination directory so we make one mkdir +
+        // one /api/files probe per directory regardless of how many items
+        // are in flight.
+        var groups: [String: [QueueItem]] = [:]
+        var order: [String] = []
         for item in items {
-            guard let filename = item.epubFilename else { continue }
-            let url = AppPaths.queueDir.appendingPathComponent(filename)
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let data = try? Data(contentsOf: url) else {
-                try? await queue.setStatus(id: item.id, .failed, error: "EPUB missing on disk")
-                failed += 1
-                continue
+            let dir = destinationPath(for: item)
+            if groups[dir] == nil { order.append(dir) }
+            groups[dir, default: []].append(item)
+        }
+
+        // Cache per-directory file listings across this flush.
+        var listingCache: [String: [String: Int]] = [:]
+        var ensuredDirs: Set<String> = []
+
+        outer: for path in order {
+            guard let group = groups[path] else { continue }
+
+            if !ensuredDirs.contains(path) {
+                await ensureDirectoryExists(ip: ip, path: path)
+                ensuredDirs.insert(path)
             }
 
-            // Idempotency: same name + same size on device → skip and mark uploaded.
-            if let existingSize = existing[filename], existingSize == data.count {
-                try? await queue.setStatus(id: item.id, .uploaded)
-                skipped += 1
-                continue
+            let existing: [String: Int]
+            if let cached = listingCache[path] {
+                existing = cached
+            } else {
+                existing = await fetchListing(ip: ip, path: path)
+                listingCache[path] = existing
             }
 
-            try? await queue.setStatus(id: item.id, .uploading)
-            try? await queue.incrementAttempts(id: item.id)
-
-            do {
-                try await X4Client.upload(ip: ip, filename: filename, data: data)
-                // Confirm with a list to make sure it landed.
-                let after = try await X4Client.listFiles(ip: ip, path: "/")
-                if after.contains(where: { $0.name == filename && ($0.size ?? -1) == data.count }) {
-                    try? await queue.setStatus(id: item.id, .uploaded)
-                    sent += 1
-                } else {
-                    try? await queue.setStatus(id: item.id, .ready,
-                        error: "Upload returned 200 but file did not appear in listing")
+            for item in group {
+                guard let filename = item.epubFilename else { continue }
+                let url = AppPaths.queueDir.appendingPathComponent(filename)
+                guard FileManager.default.fileExists(atPath: url.path),
+                      let data = try? Data(contentsOf: url) else {
+                    try? await queue.setStatus(id: item.id, .failed, error: "EPUB missing on disk")
                     failed += 1
+                    continue
                 }
-            } catch {
-                try? await queue.setStatus(id: item.id, .ready, error: "\(error)")
-                failed += 1
-                // Stop the loop on the first failure — likely the device dropped off WiFi.
-                break
+
+                // Idempotency: same name + same size at the same path → skip.
+                if let existingSize = existing[filename], existingSize == data.count {
+                    try? await queue.setStatus(id: item.id, .uploaded)
+                    skipped += 1
+                    continue
+                }
+
+                try? await queue.setStatus(id: item.id, .uploading)
+                try? await queue.incrementAttempts(id: item.id)
+
+                do {
+                    let uploadPath = path == "/" ? nil : path
+                    try await X4Client.upload(ip: ip, filename: filename, data: data, path: uploadPath)
+                    // Confirm with a list to make sure it landed at the same path.
+                    let after = try await X4Client.listFiles(ip: ip, path: path)
+                    if after.contains(where: { $0.name == filename && ($0.size ?? -1) == data.count }) {
+                        try? await queue.setStatus(id: item.id, .uploaded)
+                        sent += 1
+                    } else {
+                        try? await queue.setStatus(id: item.id, .ready,
+                            error: "Upload returned 200 but file did not appear in listing")
+                        failed += 1
+                    }
+                } catch {
+                    try? await queue.setStatus(id: item.id, .ready, error: "\(error)")
+                    failed += 1
+                    // Stop the loop on the first failure — likely the device dropped off WiFi.
+                    break outer
+                }
             }
         }
 
         return FlushResult(reachable: true, sent: sent, skipped: skipped, failed: failed)
+    }
+
+    /// Where on the device this item should land. Articles/essays go into
+    /// `/essays`; books stay at root.
+    private func destinationPath(for item: QueueItem) -> String {
+        switch item.capture.kind {
+        case .article: return "/essays"
+        case .book:    return "/"
+        }
+    }
+
+    private func fetchListing(ip: String, path: String) async -> [String: Int] {
+        do {
+            let files = try await X4Client.listFiles(ip: ip, path: path)
+            var dict: [String: Int] = [:]
+            for f in files where !(f.isDirectory == true) {
+                if let size = f.size { dict[f.name] = size }
+            }
+            return dict
+        } catch {
+            return [:]
+        }
+    }
+
+    /// Best-effort directory creation. If the directory already exists the
+    /// firmware is free to return an error — we tolerate that and let the
+    /// upload itself surface any real problem. Only handles single-level
+    /// paths like "/essays"; nested paths would need iterative mkdirs.
+    private func ensureDirectoryExists(ip: String, path: String) async {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty, !trimmed.contains("/") else { return }
+
+        // Skip mkdir if a directory with this name already exists at root.
+        if let listing = try? await X4Client.listFiles(ip: ip, path: "/"),
+           listing.contains(where: { $0.name == trimmed && $0.isDirectory == true }) {
+            return
+        }
+        _ = try? await X4Client.mkdir(ip: ip, name: trimmed, path: nil)
     }
 }

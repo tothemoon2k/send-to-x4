@@ -287,17 +287,25 @@ to `maxAttempts = 4`, then `.failed`.
 
 ### 4.7 X4 uploader (`X4Uploader.swift`)
 
-Idempotent flush:
+Idempotent flush, grouped by destination directory. Articles
+(`Capture.kind == .article`) route into `/essays`; books stay at root.
+The mapping lives in `destinationPath(for:)`.
 
-1. `GET /api/files` once to build a name → size map.
-2. For each `.ready` queue item: if its EPUB filename + size already
-   exists on the device, mark `.uploaded` and skip.
-3. Otherwise `POST /upload` (multipart, field `file`).
-4. Confirm with another `GET /api/files` showing the entry; only then
-   mark `.uploaded`. If the listing doesn't show it, drop back to
-   `.ready` with a warning.
-5. On any HTTP failure, drop back to `.ready` with the error stored
-   and break the loop (likely WiFi dropped).
+1. Group `.ready` items by destination path.
+2. For each non-root destination, ensure the directory exists. If a
+   `GET /api/files?path=/` listing already shows it as a directory, skip
+   mkdir. Otherwise `POST /mkdir` (form-encoded `name`); tolerate any
+   non-2xx (firmware may error when the directory already exists).
+3. For each group, `GET /api/files?path=<dir>` once to build a per-path
+   name → size map.
+4. For each item: if its EPUB filename + size already exists at that
+   path, mark `.uploaded` and skip.
+5. Otherwise `POST /upload?path=<dir>` (multipart, field `file`).
+6. Confirm with another `GET /api/files?path=<dir>` showing the entry;
+   only then mark `.uploaded`. If the listing doesn't show it, drop back
+   to `.ready` with a warning.
+7. On any HTTP failure, drop back to `.ready` with the error stored and
+   break the loop (likely WiFi dropped).
 
 ### 4.8 Persistence
 
@@ -450,13 +458,15 @@ call within the 5-minute TTL.
 the classic Mac-Plus look that reads well on e-ink. On the X4's panel,
 mid-tones from Floyd-Steinberg muddy quickly.
 
-**D8. Idempotent uploads keyed by filename + size.**
+**D8. Idempotent uploads keyed by filename + size at a path.**
 The X4 has no per-file checksums or modification times exposed. Name +
-size collision is good enough. EPUB filenames are clean title slugs
-(`great-hackers.epub`); two different captures that resolve to the same
-slug get a `-2`, `-3`, … suffix only on actual queue-side collision
-(see `BuildPipeline.epubFilename`). Same-URL re-enqueue evicts the
-prior item before this check, so retries reuse the same filename.
+size collision at a destination path is good enough; articles upload
+into `/essays` and books stay at root, so the namespaces don't overlap.
+EPUB filenames are clean title slugs (`great-hackers.epub`) — two
+different captures that resolve to the same slug get a `-2`, `-3`, …
+suffix only on actual queue-side collision (see
+`BuildPipeline.epubFilename`). Same-URL re-enqueue evicts the prior
+item before this check, so retries reuse the same filename.
 
 **D9. Probe = last-known IP first, /24 scan as fallback.**
 The device has no mDNS/Bonjour, so there's no clean discovery. Caching

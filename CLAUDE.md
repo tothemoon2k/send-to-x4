@@ -192,11 +192,16 @@ that fails. The scan filters by a CrossPoint signature (non-empty
 `version` field in `/api/status` JSON). The right long-term fix is a
 DHCP reservation; we surface this in Settings.
 
-**Uploads are idempotent on filename + size.** Before posting to
-`/upload`, `X4Uploader.flush` pre-fetches `/api/files`, skips files
-that already exist with matching size, and confirms post-upload via
-another listing before marking `.uploaded`. The CrossPoint API exposes
-no checksums, so name + size is the strongest invariant we have.
+**Uploads are idempotent on filename + size, grouped by destination
+directory.** Articles upload into `/essays`; books stay at root.
+`X4Uploader.flush` groups ready items by `destinationPath(for:)`, ensures
+each directory exists once per flush via `POST /mkdir` (skipped if a root
+`/api/files` listing already shows it), pre-fetches `/api/files?path=<dir>`
+per group for the name → size idempotency map, and confirms each upload
+with another per-path listing before marking `.uploaded`. The CrossPoint
+API exposes no checksums, so name + size at a path is the strongest
+invariant we have. Routing is `Capture.kind`-driven — change
+`destinationPath(for:)` if you want a different layout.
 
 **EPUB filenames are clean stems with collision-only disambiguation.**
 `BuildPipeline.epubFilename` slugifies the polished title (max 40 chars,

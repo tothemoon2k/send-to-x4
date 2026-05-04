@@ -94,4 +94,42 @@ public enum X4Client {
             throw Error.http(http.statusCode, text)
         }
     }
+
+    /// Create a directory on the device. `name` is the folder name; `path`
+    /// is the parent (defaults to root). The firmware's `/mkdir` is form-
+    /// encoded (see SPEC.md API surface). Calling this when the directory
+    /// already exists may return a 4xx — callers should tolerate that.
+    public static func mkdir(
+        ip: String,
+        name: String,
+        path: String? = nil,
+        timeout: TimeInterval = 5.0
+    ) async throws {
+        guard let url = URL(string: "http://\(ip)/mkdir") else { throw Error.invalidURL }
+
+        var fields: [(String, String)] = [("name", name)]
+        if let path = path { fields.append(("path", path)) }
+        let body = fields.map { "\($0.0)=\(percentEncodeFormValue($0.1))" }.joined(separator: "&")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body.data(using: .utf8)
+
+        let (respData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw Error.http(-1, "") }
+        if !(200..<300).contains(http.statusCode) {
+            let text = String(data: respData, encoding: .utf8) ?? ""
+            throw Error.http(http.statusCode, text)
+        }
+    }
+}
+
+private func percentEncodeFormValue(_ s: String) -> String {
+    // RFC 3986 unreserved set; everything else gets percent-encoded so the
+    // server sees the value verbatim (incl. leading "/" in path values).
+    var allowed = CharacterSet.alphanumerics
+    allowed.insert(charactersIn: "-._~")
+    return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
 }
