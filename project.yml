@@ -46,8 +46,6 @@ targets:
         product: SendToX4Core
       - target: SafariWebExtension
         embed: true
-      - target: ShareExtension
-        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4
@@ -93,28 +91,12 @@ targets:
         SKIP_INSTALL: YES
     dependencies: []
 
-  ShareExtension:
-    type: app-extension
-    platform: macOS
-    sources:
-      - ShareExtension/ShareViewController.swift
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4.ShareExtension
-        PRODUCT_NAME: ShareExtension
-        GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_FILE: ShareExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
-        SKIP_INSTALL: YES
-    dependencies: []
-
 schemes:
   SendToX4:
     build:
       targets:
         SendToX4: all
         SafariWebExtension: all
-        ShareExtension: all
     run:
       config: Debug
       executable: SendToX4
