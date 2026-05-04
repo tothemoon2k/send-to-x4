@@ -2,7 +2,6 @@ import { STATUS_ENDPOINT } from "./config.js";
 
 const content = document.getElementById("content");
 const sendBtn = document.getElementById("send-now");
-const sendBookBtn = document.getElementById("send-book");
 
 async function refresh() {
   try {
@@ -55,25 +54,6 @@ sendBtn.addEventListener("click", async () => {
     setTimeout(() => {
       sendBtn.disabled = false;
       sendBtn.textContent = "Send this page";
-    }, 1200);
-  }
-});
-
-sendBookBtn.addEventListener("click", async () => {
-  sendBookBtn.disabled = true;
-  sendBookBtn.textContent = "Identifying…";
-  try {
-    const reply = await chrome.runtime.sendMessage({ type: "capture-active-tab-as-book" });
-    if (!reply?.ok) throw new Error(reply?.error || "Failed");
-    sendBookBtn.textContent = "Queued ✓";
-    setTimeout(() => window.close(), 600);
-  } catch (e) {
-    sendBookBtn.textContent = "Failed";
-    content.className = "err";
-    content.textContent = e.message || String(e);
-    setTimeout(() => {
-      sendBookBtn.disabled = false;
-      sendBookBtn.textContent = "Send this page as a book";
     }, 1200);
   }
 });
