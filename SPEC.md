@@ -215,9 +215,11 @@ daemon — only route registration is duplicated.
   `doc.text` placeholder), title above subtitle (byline → siteName
   fallback) in a lighter gray, error text in red below if any, and a
   small monospaced status word (`queued` / `building` / `ready` /
-  `sending` / `sent` / `failed`) on the right. No footer — Settings
-  and Quit are reachable only via the right-click menu on the status
-  item.
+  `sending` / `sent` / `failed`) on the right. Right-click on a row
+  opens a per-item context menu (currently just **Remove from queue**,
+  which calls `AppState.removeItem(id:)` → `QueueStore.remove`). No
+  footer — Settings and Quit are reachable only via the right-click
+  menu on the status item.
 - `SettingsView.swift` — last-known IP, probe interval, subnet scan
   toggle, LLM toggle, Anthropic API key (writes through to Keychain).
 - `AppState.swift` — `@MainActor` `ObservableObject` polling
@@ -629,7 +631,8 @@ image pipeline.
 **App**
 - ✅ Menubar app shell — manual `NSStatusItem` (left-click popover,
   right-click NSMenu) + SwiftUI `Settings` scene; queue list rendered
-  Spotify-style (thumbnail + title above subtitle) (`Sources/App/`).
+  Spotify-style (thumbnail + title above subtitle), per-row right-click
+  context menu with "Remove from queue" (`Sources/App/`).
 - ✅ XcodeGen `project.yml` for app + Safari Web Extension targets.
   Web-extension assets are listed individually under the target's
   `sources:` with `buildPhase: resources` (top-level files) and

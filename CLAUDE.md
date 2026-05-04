@@ -201,7 +201,11 @@ distinguish left- vs right-click. Left-click toggles an `NSPopover`
 hosting `MenuView`; right-click pops an `NSMenu` with Settings… and
 Quit via the `statusItem.menu = menu; sender.performClick(nil);
 statusItem.menu = nil` pattern. Don't move Settings/Quit back into the
-popover — the popover is the queue list only, no chrome.
+popover — the popover is the queue list only, no chrome. Per-row
+actions inside the popover (e.g. **Remove from queue**) live on the
+SwiftUI `.contextMenu` attached to each `QueueRow`, not on the popover
+chrome or the status-item menu; extend that menu when adding more
+per-item actions (e.g. "Skip polish", "Open last EPUB").
 
 **Device discovery is two-step, intentionally.** The X4 has no mDNS,
 no auth, dynamic DHCP. `X4Probe.locate()` tries the last-known IP first
