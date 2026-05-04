@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:send-to-x4}",
+            "name": "Debug sendtox4d",
+            "target": "sendtox4d",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug sendtox4d"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:send-to-x4}",
+            "name": "Release sendtox4d",
+            "target": "sendtox4d",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release sendtox4d"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:send-to-x4}",
+            "name": "Debug sendtox4-smoke",
+            "target": "sendtox4-smoke",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug sendtox4-smoke"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:send-to-x4}",
+            "name": "Release sendtox4-smoke",
+            "target": "sendtox4-smoke",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release sendtox4-smoke"
+        }
+    ]
+}
