@@ -52,6 +52,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.justingarner.sendtox4
         PRODUCT_NAME: "Send to X4"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: ""

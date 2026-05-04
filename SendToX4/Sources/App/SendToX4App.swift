@@ -12,7 +12,7 @@ struct SendToX4App: App {
                 .environmentObject(appState)
                 .frame(minWidth: 320, idealWidth: 360)
         } label: {
-            Image(systemName: appState.x4Reachable ? "book.closed.fill" : "book.closed")
+            Image("MenuBarIcon")
         }
         .menuBarExtraStyle(.window)
 
