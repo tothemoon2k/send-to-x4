@@ -305,7 +305,8 @@ Idempotent flush:
 
 - `queue.json` — `[QueueItem]` array, atomically rewritten on each mutation.
 - `queue/<id>.capture.json` — raw capture for retry/debug.
-- `queue/<slug>-<id>.epub` — built EPUBs awaiting upload.
+- `queue/<slug>.epub` — built EPUBs awaiting upload (with `-2`, `-3`, …
+  on slug collisions across queue items; see D8).
 - `settings.json` — non-secret prefs.
 
 Same-URL re-enqueue evicts the older pending/ready/building item *and*
@@ -451,8 +452,11 @@ mid-tones from Floyd-Steinberg muddy quickly.
 
 **D8. Idempotent uploads keyed by filename + size.**
 The X4 has no per-file checksums or modification times exposed. Name +
-size collision is good enough; an article that gets re-captured and
-produces a new EPUB will get a new short suffix in the filename.
+size collision is good enough. EPUB filenames are clean title slugs
+(`great-hackers.epub`); two different captures that resolve to the same
+slug get a `-2`, `-3`, … suffix only on actual queue-side collision
+(see `BuildPipeline.epubFilename`). Same-URL re-enqueue evicts the
+prior item before this check, so retries reuse the same filename.
 
 **D9. Probe = last-known IP first, /24 scan as fallback.**
 The device has no mDNS/Bonjour, so there's no clean discovery. Caching

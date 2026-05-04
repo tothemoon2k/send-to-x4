@@ -198,6 +198,17 @@ that already exist with matching size, and confirms post-upload via
 another listing before marking `.uploaded`. The CrossPoint API exposes
 no checksums, so name + size is the strongest invariant we have.
 
+**EPUB filenames are clean stems with collision-only disambiguation.**
+`BuildPipeline.epubFilename` slugifies the polished title (max 40 chars,
+`a-z0-9-` only) and uses it directly: `great-hackers.epub`. Two different
+captures that resolve to the same slug get `-2`, `-3`, … only on actual
+queue-side collision; the current item is excluded from the collision
+check so retries reuse their own filename. Pathological fallback (99
+same-titled items in flight) is a 6-char id-derived suffix. Cross-session
+collisions on the *device* (e.g. an old `great-hackers.epub` from a
+purged queue item) aren't handled here — the device-side dedupe in
+`X4Uploader.flush` would need a rename-on-size-mismatch step.
+
 **EPUB structural rule.** `EpubWriter.write` MUST emit `mimetype` as
 the first entry, STORED (uncompressed), with no extra fields, so the
 ASCII string `application/epub+zip` lands at byte offset 38. This is
@@ -213,7 +224,7 @@ prefer cleaner structural HTML over more CSS rules.
 
 **Queue persistence is plain JSON.** `~/Library/Application
 Support/SendToX4/queue.json` is rewritten atomically on every mutation.
-Per-item `<id>.capture.json` and `<slug>-<id>.epub` live alongside in
+Per-item `<id>.capture.json` and `<slug>.epub` live alongside in
 `queue/`. The whole thing is bounded by "items captured between two X4
 File Transfer sessions" — small enough that SQLite would be overkill.
 

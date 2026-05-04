@@ -204,22 +204,34 @@ public actor BuildPipeline {
 
         // The EPUB is written to disk by QueueStore.attachEpub atomically with
         // the manifest update — keeps the disk and the manifest in sync.
-        let filename = epubFilename(for: item, title: polishedTitle)
+        let filename = await epubFilename(for: item, title: polishedTitle)
         return BuildOutcome(filename: filename, data: data, warning: fellBack ? "polish fell back" : nil)
     }
 
-    private func epubFilename(for item: QueueItem, title: String) -> String {
-        epubFilename(for: item, title: title, fallbackStem: "article")
+    private func epubFilename(for item: QueueItem, title: String) async -> String {
+        await epubFilename(for: item, title: title, fallbackStem: "article")
     }
 
-    private func epubFilename(for item: QueueItem, title: String, fallbackStem: String) -> String {
+    private func epubFilename(for item: QueueItem, title: String, fallbackStem: String) async -> String {
         let base = title.lowercased()
             .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         let trimmed = String(base.prefix(40))
         let stem = trimmed.isEmpty ? fallbackStem : trimmed
-        // Short stable suffix for collision-resistance — strip dashes so
-        // filenames don't end up with double separators.
+        // Disambiguate only on actual collision against other queue items.
+        // The current item is excluded so retries reuse their own filename
+        // rather than racing themselves to "-2".
+        let used: Set<String> = Set(await queue.all().compactMap { other in
+            other.id == item.id ? nil : other.epubFilename
+        })
+        let primary = "\(stem).epub"
+        if !used.contains(primary) { return primary }
+        for n in 2...99 {
+            let candidate = "\(stem)-\(n).epub"
+            if !used.contains(candidate) { return candidate }
+        }
+        // Pathological: 99 same-titled items in flight. Fall back to an
+        // id-based suffix so we still produce a unique filename.
         let suffix = item.id
             .replacingOccurrences(of: "-", with: "")
             .replacingOccurrences(of: "_", with: "")
@@ -346,7 +358,7 @@ public actor BuildPipeline {
         let epubData = try await BookConverter.toEPUB(raw, format: best.format, hint: hint, coverPNG: processedCover)
         log("[book] EPUB ready: \(epubData.count) bytes")
 
-        let filename = epubFilename(for: item, title: identified.title, fallbackStem: "book")
+        let filename = await epubFilename(for: item, title: identified.title, fallbackStem: "book")
         return BuildOutcome(filename: filename, data: epubData, warning: nil)
     }
 
