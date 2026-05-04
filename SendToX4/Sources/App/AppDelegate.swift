@@ -12,9 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var workTask: Task<Void, Never>?
     private var tickerTask: Task<Void, Never>?
 
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
+
     private let workSignal = AsyncStream<Void>.makeStream()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupStatusItem()
         startHTTPServer()
         startWorker()
         startTicker()
@@ -24,6 +28,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server?.stop()
         workTask?.cancel()
         tickerTask?.cancel()
+    }
+
+    @MainActor
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let image = NSImage(named: "MenuBarIcon")
+            image?.isTemplate = true
+            button.image = image
+            button.target = self
+            button.action = #selector(handleStatusItemClick(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let host = NSHostingController(
+            rootView: MenuView()
+                .environmentObject(AppState.shared)
+                .frame(minWidth: 320, idealWidth: 360)
+        )
+        host.sizingOptions = .preferredContentSize
+        popover.contentViewController = host
+
+        self.statusItem = item
+        self.popover = popover
+    }
+
+    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp {
+            showContextMenu(from: sender)
+        } else {
+            togglePopover(from: sender)
+        }
+    }
+
+    private func togglePopover(from sender: NSStatusBarButton) {
+        guard let popover else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        }
+    }
+
+    private func showContextMenu(from sender: NSStatusBarButton) {
+        guard let statusItem else { return }
+        let menu = NSMenu()
+
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
+
+        statusItem.menu = menu
+        sender.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func startHTTPServer() {

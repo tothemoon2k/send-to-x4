@@ -3,15 +3,12 @@ import SendToX4Core
 
 struct MenuView: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
             queueList
-            Divider()
-            footer
         }
         .padding(0)
     }
@@ -66,49 +63,26 @@ struct MenuView: View {
         }
     }
 
-    private var footer: some View {
-        HStack(spacing: 14) {
-            Button("Send queue now") {
-                Task { _ = try? await postLocal("/flush", method: "POST", body: Data()) }
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-
-            Spacer()
-
-            Button("Settings…") {
-                openSettings()
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12))
-
-            Button("Quit") {
-                NSApplication.shared.terminate(nil)
-            }
-            .buttonStyle(.plain)
-            .font(.system(size: 12))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
 }
 
 struct QueueRow: View {
     let item: QueueItem
 
+    private static let thumbSize: CGFloat = 44
+
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            statusIcon
-                .frame(width: 14, height: 14)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 10) {
+            thumbnail
+            VStack(alignment: .leading, spacing: 1) {
                 Text(item.capture.title ?? item.capture.url)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
-                if let site = item.capture.siteName {
-                    Text(site)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondary.opacity(0.85))
+                        .lineLimit(1)
                 }
                 if let err = item.lastError, !err.isEmpty {
                     Text(err)
@@ -117,25 +91,52 @@ struct QueueRow: View {
                         .lineLimit(2)
                 }
             }
-            Spacer()
+            Spacer(minLength: 6)
             Text(statusText)
                 .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        Group {
+            if let raw = item.capture.ogImage, let url = URL(string: raw) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .failure:
+                        placeholder
+                    case .empty:
+                        placeholder
+                    @unknown default:
+                        placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: Self.thumbSize, height: Self.thumbSize)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            Color.secondary.opacity(0.15)
+            Image(systemName: item.capture.kind == .book ? "book.closed" : "doc.text")
+                .font(.system(size: 16))
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var statusIcon: some View {
-        let symbol: String
-        let color: Color
-        switch item.status {
-        case .pending:    symbol = "clock";                color = .secondary
-        case .building:   symbol = "gearshape.2";          color = .blue
-        case .ready:      symbol = "tray.full";            color = .orange
-        case .uploading:  symbol = "arrow.up.circle";      color = .blue
-        case .uploaded:   symbol = "checkmark.circle.fill";color = .green
-        case .failed:     symbol = "exclamationmark.octagon"; color = .red
-        }
-        return Image(systemName: symbol).foregroundStyle(color)
+    private var subtitle: String? {
+        if let b = item.capture.byline?.trimmingCharacters(in: .whitespaces), !b.isEmpty { return b }
+        if let s = item.capture.siteName?.trimmingCharacters(in: .whitespaces), !s.isEmpty { return s }
+        return nil
     }
 
     private var statusText: String {
