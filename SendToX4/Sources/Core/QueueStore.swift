@@ -135,13 +135,15 @@ public actor QueueStore {
 
     public func remove(id: String) throws {
         ensureLoaded()
+        let removed = items.first(where: { $0.id == id })
         items.removeAll { $0.id == id }
-        // Clean up artifacts.
+        // Clean up artifacts. Built EPUBs use the polished-title slug, not the id —
+        // read the filename off the item rather than guessing `<id>.epub`.
         let dir = AppPaths.queueDir
-        let candidates = [
-            dir.appendingPathComponent("\(id).epub"),
-            dir.appendingPathComponent("\(id).capture.json")
-        ]
+        var candidates = [dir.appendingPathComponent("\(id).capture.json")]
+        if let epub = removed?.epubFilename {
+            candidates.append(dir.appendingPathComponent(epub))
+        }
         for url in candidates {
             try? FileManager.default.removeItem(at: url)
         }

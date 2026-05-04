@@ -55,6 +55,14 @@ struct MenuView: View {
                         QueueRow(item: item)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button {
+                                    appState.removeItem(id: item.id)
+                                } label: {
+                                    Label("Remove from queue", systemImage: "trash")
+                                }
+                            }
                         Divider().opacity(0.5)
                     }
                 }

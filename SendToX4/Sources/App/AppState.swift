@@ -39,4 +39,14 @@ final class AppState: ObservableObject {
     var pendingItems: [QueueItem] {
         queue.filter { $0.status != .uploaded }
     }
+
+    /// Optimistically drops the row from the visible queue, then asks the
+    /// store to remove it (and its on-disk artifacts) and re-syncs.
+    func removeItem(id: String) {
+        queue.removeAll { $0.id == id }
+        Task { @MainActor in
+            try? await QueueStore.shared.remove(id: id)
+            self.queue = await QueueStore.shared.all()
+        }
+    }
 }
