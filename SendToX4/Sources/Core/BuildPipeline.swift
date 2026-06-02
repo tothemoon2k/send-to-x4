@@ -130,7 +130,8 @@ public actor BuildPipeline {
                 polishedAuthor = polished.author?.nonEmpty ?? polishedAuthor
                 polishedChapters = polished.chapters.map { ($0.heading, $0.html) }
                 fellBack = polished.fellBackToUnpolished
-                log("[polish] \(fellBack ? "fell back (length guardrail)" : "ok")  in=\(polished.inputWordCount) out=\(polished.outputWordCount) cacheRead=\(polished.cacheReadTokens ?? 0) cacheCreate=\(polished.cacheCreationTokens ?? 0)")
+                let ratioPct = polished.inputWordCount > 0 ? Int(round(100.0 * Double(polished.outputWordCount) / Double(polished.inputWordCount))) : 100
+                log("[polish] \(fellBack ? "fell back (length guardrail)" : "ok")  in=\(polished.inputWordCount) out=\(polished.outputWordCount) (\(ratioPct)%) chapters=\(polished.chapters.count) cacheRead=\(polished.cacheReadTokens ?? 0) cacheCreate=\(polished.cacheCreationTokens ?? 0)")
             } catch ClaudePolish.Error.missingAPIKey {
                 log("[polish] skipped — no API key")
             } catch {
